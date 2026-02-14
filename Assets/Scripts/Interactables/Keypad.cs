@@ -1,7 +1,10 @@
 using UnityEngine;
 
-public class Medkit : Interactable
+public class Keypad : Interactable
 {
+    [SerializeField]
+    private GameObject door;
+    private bool doorOpen;
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
@@ -13,9 +16,9 @@ public class Medkit : Interactable
     {
         
     }
-    // this function is where we will design our interaction using code.
     protected override void Interact()
     {
-        Debug.Log("Interacted with " + gameObject.name);
+        doorOpen = !doorOpen;
+        door.GetComponent<Animator>().SetBool("IsOpen",doorOpen);
     }
 }

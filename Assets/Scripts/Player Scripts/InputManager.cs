@@ -3,23 +3,28 @@ using UnityEngine.InputSystem;
 public class InputManager : MonoBehaviour
 {
     private PlayerInput playerInput;
-    public PlayerInput.OnFootActions onFoot;
+    private PlayerInput.OnFootActions onFoot;
     private PlayerMotor motor;
     private PlayerLook look;
+    public PlayerInput.OnFootActions OnFoot => onFoot;
+
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Awake()
-    {
-        playerInput = new PlayerInput();
-        onFoot = playerInput.OnFoot;
+{
+    playerInput = new PlayerInput();
+    onFoot = playerInput.OnFoot;
 
-        motor =  GetComponent<PlayerMotor>();
-        look = GetComponent<PlayerLook>();
-        
-        onFoot.Jump.performed += ctx => motor.Jump();
-        onFoot.Crouch.performed += ctx => motor.Crouch();
-        onFoot.Sprint.performed += ctx => motor.Sprint();
-    }
+    motor = GetComponent<PlayerMotor>();
+    if (motor == null) motor = GetComponentInParent<PlayerMotor>();
+
+    look = GetComponent<PlayerLook>();
+    if (look == null) look = GetComponentInParent<PlayerLook>();
+
+    onFoot.Jump.performed   += _ => motor.Jump();
+    onFoot.Crouch.performed += _ => motor.Crouch();
+    onFoot.Sprint.performed += _ => motor.Sprint();
+}
 
     // Update is called once per frame
     void FixedUpdate()
