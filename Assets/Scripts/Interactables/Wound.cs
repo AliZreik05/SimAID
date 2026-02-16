@@ -2,8 +2,11 @@ using UnityEngine;
 
 public class WoundInteractable : Interactable
 {
+    
     [Header("Cost")]
     [SerializeField] private int bandageCost = 1;
+    private ScenarioGameLoop loop;
+
 
     [Header("Feedback (optional)")]
     [SerializeField] private Renderer woundRenderer;      // assign capsule renderer, or auto
@@ -14,11 +17,23 @@ public class WoundInteractable : Interactable
 
     private void Awake()
     {
+        loop = FindFirstObjectByType<ScenarioGameLoop>();
         if (!woundRenderer) woundRenderer = GetComponentInChildren<Renderer>();
         if (bandageVisual) bandageVisual.SetActive(false);
         UpdatePrompt();
     }
+    private void LateUpdate()
+        {
+            if (treated) return;
 
+            var player = GameObject.FindGameObjectWithTag("Player");
+            if (!player) return;
+
+            var inv = player.GetComponent<BandageInventory>();
+            if (!inv) return;
+
+            promptMessage = inv.HasBandage ? "Apply bandage (E)" : "Need bandage";
+        }
     private void UpdatePrompt()
     {
         if (treated)
@@ -61,8 +76,12 @@ public class WoundInteractable : Interactable
         treated = true;
         promptMessage = "Treated";
 
+
         if (woundRenderer) woundRenderer.enabled = false;
         if (bandageVisual) bandageVisual.SetActive(true);
+
+         if (loop != null)
+        loop.NotifyBandageApplied();
 
         // TODO: objective tick here if you have ObjectiveManager
         // ObjectiveManager.Instance.Complete(ObjectiveId.ControlBleeding);

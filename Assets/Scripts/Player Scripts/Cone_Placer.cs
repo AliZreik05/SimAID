@@ -1,7 +1,15 @@
 using UnityEngine;
+using System;
+
 
 public class ConePlacer : MonoBehaviour
 {
+    public event Action<int> OnConePlaced;   // sends total placed
+    [SerializeField] private int requiredCones = 4;
+    private int placedCones;
+    public int PlacedCones => placedCones;
+    public int RequiredCones => requiredCones;
+
     [Header("Prefabs")]
     [SerializeField] private GameObject coneWorldPrefab; // real cone (collider + Traffic_Cone)
     [SerializeField] private GameObject coneGhostPrefab; // preview cone (no collider, white/transparent)
@@ -101,7 +109,7 @@ private Vector3 lastNormal;
 }
 
 
-    private void ConfirmPlacement()
+   private void ConfirmPlacement()
 {
     if (ghost == null || coneWorldPrefab == null) return;
     if (!hasLastHit) return;
@@ -110,9 +118,14 @@ private Vector3 lastNormal;
 
     coneCount = Mathf.Max(0, coneCount - 1);
 
+    // NEW: count placed cones (objective is about placement)
+    placedCones++;
+    OnConePlaced?.Invoke(placedCones);
+
     if (coneCount <= 0)
         CancelPlacement();
 }
+
 
     private void CancelPlacement()
     {
