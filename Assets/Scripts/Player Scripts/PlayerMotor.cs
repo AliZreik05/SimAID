@@ -4,6 +4,9 @@ public class PlayerMotor : MonoBehaviour
 {
     private CharacterController controller;
     private Vector3 playerVelocity;
+
+    [SerializeField] private Transform orientation;
+
     public float speed = 5;
     private bool IsGrounded;
     public float gravity = -9.8f;
@@ -46,19 +49,24 @@ public class PlayerMotor : MonoBehaviour
         }
     }
     public void ProcessMove(Vector2 input)
+{
+    // Get movement direction relative to camera
+    Vector3 move = orientation.forward * input.y + orientation.right * input.x;
+    move.y = 0f; // prevent vertical movement from camera tilt
+
+    controller.Move(move * speed * Time.deltaTime);
+
+    // Gravity
+    playerVelocity.y += gravity * Time.deltaTime;
+
+    if (controller.isGrounded && playerVelocity.y < 0)
     {
-        Vector3 moveDirection = Vector3.zero;
-        moveDirection.x = input.x;
-        moveDirection.z = input.y;
-        controller.Move(transform.TransformDirection(moveDirection)*speed*Time.deltaTime);
-        playerVelocity.y += gravity * Time.deltaTime;
-        if(IsGrounded && playerVelocity.y < 0)
-        {
-            playerVelocity.y = -2f;
-        }
-        controller.Move(playerVelocity * Time.deltaTime);
-        Debug.Log(playerVelocity.y);
+        playerVelocity.y = -2f;
     }
+
+    controller.Move(playerVelocity * Time.deltaTime);
+}
+
     public void Jump()
     {
         if(IsGrounded)
