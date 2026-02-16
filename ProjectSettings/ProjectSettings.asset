@@ -756,6 +756,7 @@ PlayerSettings:
   webWasm2023: 0
   webEnableSubmoduleStrippingCompatibility: 0
   scriptingDefineSymbols:
+    Android: APP_UI_EDITOR_ONLY
     Standalone: APP_UI_EDITOR_ONLY
     WebGL: APP_UI_EDITOR_ONLY
   additionalCompilerArguments: {}
@@ -855,7 +856,7 @@ PlayerSettings:
   qnxGraphicConfPath: 
   apiCompatibilityLevel: 6
   captureStartupLogs: {}
-  activeInputHandler: 2
+  activeInputHandler: 1
   windowsGamepadBackendHint: 0
   cloudProjectId: 
   framebufferDepthMemorylessMode: 0
