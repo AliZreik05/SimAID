@@ -62,3 +62,5 @@ Assets/AssetStoreTools*
 # Assets/
 # Packages/
 # ProjectSettings/
+
+*.apk
