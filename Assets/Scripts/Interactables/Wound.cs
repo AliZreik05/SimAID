@@ -88,4 +88,21 @@ public class WoundInteractable : Interactable
 
         if (disableAfterTreat) gameObject.SetActive(false);
     }
+
+    public void ApplyBandageVR()
+{
+    if (treated) return;
+
+    treated = true;
+    promptMessage = "Treated";
+
+    if (woundRenderer) woundRenderer.enabled = false;
+    if (bandageVisual) bandageVisual.SetActive(true);
+
+    if (loop != null)
+        loop.NotifyBandageApplied();
+
+    if (disableAfterTreat)
+        gameObject.SetActive(false);
+}
 }
