@@ -5,6 +5,7 @@ public class MedkitOpener : Interactable
     [SerializeField] private MedicalScenarioManager scenarioManager;
     [SerializeField] private Camera mainCamera;
     [SerializeField] private Camera medkitCamera;
+    [SerializeField] private GameObject interactionPromptUI;
 
     private void Awake()
     {
@@ -27,15 +28,17 @@ public class MedkitOpener : Interactable
 
         if (!mainCamera || !medkitCamera)
         {
-            Debug.LogWarning("MedkitOpener: Main camera or medkit camera is missing.");
+            Debug.LogWarning("MedkitOpener: Missing camera reference.");
             return;
         }
 
         scenarioManager.EnterMedkitView();
 
-        mainCamera.enabled = false;
-        medkitCamera.enabled = true;
+        if (interactionPromptUI != null)
+            interactionPromptUI.SetActive(false);
 
-        Debug.Log("Medkit opened.");
+        medkitCamera.gameObject.SetActive(true);
+        medkitCamera.enabled = true;
+        mainCamera.enabled = false;
     }
 }

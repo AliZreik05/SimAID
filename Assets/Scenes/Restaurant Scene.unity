@@ -15395,6 +15395,7 @@ GameObject:
   - component: {fileID: 687004823}
   - component: {fileID: 687004822}
   - component: {fileID: 687004821}
+  - component: {fileID: 687004824}
   m_Layer: 0
   m_Name: MedkitCamera
   m_TagString: Untagged
@@ -15476,6 +15477,27 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &687004824
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 687004820}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2aaf225c0a6f4dbdbcb37d87ff4ca83, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MedkitCameraController
+  medkitCamera: {fileID: 687004822}
+  rotationSpeed: 0.12
+  zoomSpeed: 2
+  minFov: 20
+  maxFov: 60
+  minYaw: -12
+  maxYaw: 12
+  minPitch: -15
+  maxPitch: 15
 --- !u!1001 &687344905
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -48858,6 +48880,7 @@ MonoBehaviour:
     - questionType: 5
       answer: No, I do not have asthma.
     keyQuestions: 010000000300000004000000
+  inputManager: {fileID: 217396636}
   maxQuestions: 3
   objectiveText: {fileID: 1928576834}
   answerText: {fileID: 356638459}
@@ -48866,8 +48889,7 @@ MonoBehaviour:
   resultPanel: {fileID: 1234313587}
   resultTitleText: {fileID: 1746907951}
   resultBodyText: {fileID: 1146382117}
-  controlsToDisableDuringUI:
-  - {fileID: 217396636}
+  controlsToDisableDuringUI: []
 --- !u!1 &2043166708
 GameObject:
   m_ObjectHideFlags: 0

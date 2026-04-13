@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using TMPro;
@@ -10,15 +11,25 @@ public class MedicalScenarioManager : MonoBehaviour
         WaitingForPatientInteraction,
         Questioning,
         MedicationSelection,
+        InMedkitView,
         Success,
         Failure
     }
+
+    [Header("Result Colors")]
+    [SerializeField] private Color successTitleColor = new Color(0.2f, 0.85f, 0.35f);
+    [SerializeField] private Color failureTitleColor = new Color(0.9f, 0.25f, 0.25f);
+    [SerializeField] private Color resultBodyColor = Color.white;
 
     [Header("Scenario Data")]
     [SerializeField] private SubScenarioData[] subScenarios;
 
     [Header("Question Settings")]
     [SerializeField] private int maxQuestions = 3;
+
+    [Header("Typing Settings")]
+    [SerializeField] private float typingSpeed = 0.025f;
+    [SerializeField] private float linePause = 0.35f;
 
     [Header("UI References")]
     [SerializeField] private TMP_Text objectiveText;
@@ -28,9 +39,14 @@ public class MedicalScenarioManager : MonoBehaviour
     [SerializeField] private GameObject resultPanel;
     [SerializeField] private TMP_Text resultTitleText;
     [SerializeField] private TMP_Text resultBodyText;
+    [Header("Patient")]
+    [SerializeField] private PatientConversationController conversationController;
+
+    [Header("Optional UI")]
+    [SerializeField] private GameObject medkitInstructionUI;
 
     [Header("Player Control")]
-    [SerializeField] private Behaviour[] controlsToDisableDuringUI;
+    [SerializeField] private InputManager inputManager;
 
     private SubScenarioData currentScenario;
     private ScenarioState currentState = ScenarioState.NotStarted;
@@ -38,20 +54,25 @@ public class MedicalScenarioManager : MonoBehaviour
     private int questionsAsked = 0;
     private readonly List<MedicalQuestionType> askedQuestions = new();
 
+    private Coroutine typingCoroutine;
+    private bool isTyping = false;
+    private bool waitingForQuestionExit = false;
+
     public ScenarioState CurrentState => currentState;
-
-    public bool HasPatientBeenInteractedWith =>
-        currentState == ScenarioState.Questioning ||
-        currentState == ScenarioState.MedicationSelection ||
-        currentState == ScenarioState.Success ||
-        currentState == ScenarioState.Failure;
-
-    public bool CanOpenMedkit =>
-        currentState == ScenarioState.MedicationSelection;
+    public bool CanOpenMedkit => currentState == ScenarioState.MedicationSelection;
 
     private void Start()
     {
         StartScenario();
+    }
+
+    private void Update()
+    {
+        if (waitingForQuestionExit && inputManager != null && inputManager.OnFoot.Interact.triggered)
+        {
+            waitingForQuestionExit = false;
+            FinishQuestioning();
+        }
     }
 
     public void StartScenario()
@@ -68,22 +89,27 @@ public class MedicalScenarioManager : MonoBehaviour
         questionsAsked = 0;
         askedQuestions.Clear();
 
+        if (typingCoroutine != null)
+        {
+            StopCoroutine(typingCoroutine);
+            typingCoroutine = null;
+        }
+
+        isTyping = false;
+        waitingForQuestionExit = false;
+
         if (objectiveText != null)
             objectiveText.text = "Interact with the patient to begin assessment.";
 
         if (answerText != null)
             answerText.text = "";
 
-        if (questionPanel != null)
-            questionPanel.SetActive(false);
+        if (questionPanel != null) questionPanel.SetActive(false);
+        if (answerPanel != null) answerPanel.SetActive(false);
+        if (resultPanel != null) resultPanel.SetActive(false);
+        if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
 
-        if (answerPanel != null)
-            answerPanel.SetActive(false);
-
-        if (resultPanel != null)
-            resultPanel.SetActive(false);
-
-        SetControlsEnabled(true);
+        SetGameplayLocked(false);
         SetCursorState(false);
 
         Debug.Log($"Selected scenario: {currentScenario.scenarioName}");
@@ -99,27 +125,28 @@ public class MedicalScenarioManager : MonoBehaviour
         if (objectiveText != null)
             objectiveText.text = $"Ask up to {maxQuestions} questions.";
 
-        if (questionPanel != null)
-            questionPanel.SetActive(true);
+        if (questionPanel != null) questionPanel.SetActive(true);
+        if (answerPanel != null) answerPanel.SetActive(false);
+        if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
 
-        if (answerPanel != null)
-            answerPanel.SetActive(true);
-
-        SetControlsEnabled(false);
+        SetGameplayLocked(true);
         SetCursorState(true);
 
         Debug.Log("Patient interaction started. Question UI opened.");
     }
 
-    public void AskQuestion(MedicalQuestionType questionType)
+    public void AskQuestion(MedicalQuestionType questionType, string questionDisplayText)
     {
         if (currentState != ScenarioState.Questioning)
+            return;
+
+        if (isTyping || waitingForQuestionExit)
             return;
 
         if (questionsAsked >= maxQuestions)
         {
             if (objectiveText != null)
-                objectiveText.text = "Assessment complete. Go to the medkit.";
+                objectiveText.text = "Assessment complete. Press E to continue.";
             return;
         }
 
@@ -135,61 +162,129 @@ public class MedicalScenarioManager : MonoBehaviour
 
         string answer = GetAnswerForQuestion(questionType);
 
-        if (answerText != null)
-            answerText.text = answer;
+        if (answerPanel != null && !answerPanel.activeSelf)
+            answerPanel.SetActive(true);
+
+        if (typingCoroutine != null)
+            StopCoroutine(typingCoroutine);
 
         int remaining = maxQuestions - questionsAsked;
+        bool isLastQuestion = remaining == 0;
 
-        if (remaining > 0)
+        if (objectiveText != null)
         {
-            if (objectiveText != null)
-                objectiveText.text = $"Question {questionsAsked}/{maxQuestions}. You can ask {remaining} more.";
+            objectiveText.text = isLastQuestion
+                ? "Final question..."
+                : $"Question {questionsAsked}/{maxQuestions}. You can ask {remaining} more.";
         }
-        else
-        {
-            FinishQuestioning();
-        }
+
+        typingCoroutine = StartCoroutine(TypeDialogue(questionDisplayText, answer, isLastQuestion));
 
         Debug.Log($"Question asked: {questionType} | Answer: {answer}");
     }
 
     public void FinishQuestioning()
-    {
-        currentState = ScenarioState.MedicationSelection;
+{
+    currentState = ScenarioState.MedicationSelection;
 
-        if (questionPanel != null)
-            questionPanel.SetActive(false);
+    if (questionPanel != null) questionPanel.SetActive(false);
+    if (answerPanel != null) answerPanel.SetActive(false);
+    if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
 
-        if (answerPanel != null)
-            answerPanel.SetActive(false);
+    if (objectiveText != null)
+        objectiveText.text = "Assessment complete. Go to the medkit and choose the correct medication.";
 
-        if (objectiveText != null)
-            objectiveText.text = "Assessment complete. Go to the medkit and choose the correct medication.";
+    if (conversationController != null)
+        conversationController.EndConversation();
 
-        SetControlsEnabled(true);
-        SetCursorState(false);
+    SetGameplayLocked(false);
+    SetCursorState(false);
 
-        Debug.Log("Questioning finished. Returned to normal player control.");
-    }
+    Debug.Log("Questioning finished. Returned to normal player control.");
+}
 
     public void EnterMedkitView()
     {
         if (currentState != ScenarioState.MedicationSelection)
             return;
 
-        if (questionPanel != null)
-            questionPanel.SetActive(false);
+        currentState = ScenarioState.InMedkitView;
 
-        if (answerPanel != null)
-            answerPanel.SetActive(false);
+        if (questionPanel != null) questionPanel.SetActive(false);
+        if (answerPanel != null) answerPanel.SetActive(false);
 
         if (objectiveText != null)
-            objectiveText.text = "Choose the correct item from the medkit.";
+            objectiveText.text = "";
 
-        SetControlsEnabled(false);
+        if (medkitInstructionUI != null)
+            medkitInstructionUI.SetActive(true);
+
+        SetGameplayLocked(true);
         SetCursorState(true);
 
         Debug.Log("Entered medkit view.");
+    }
+
+    public void ExitMedkitView()
+    {
+        if (currentState != ScenarioState.InMedkitView)
+            return;
+
+        currentState = ScenarioState.MedicationSelection;
+
+        if (medkitInstructionUI != null)
+            medkitInstructionUI.SetActive(false);
+
+        if (objectiveText != null)
+            objectiveText.text = "Choose the correct medication.";
+
+        SetGameplayLocked(false);
+        SetCursorState(false);
+
+        Debug.Log("Exited medkit view.");
+    }
+
+    private IEnumerator TypeDialogue(string question, string answer, bool finishAfterTyping)
+    {
+        isTyping = true;
+
+        if (answerText == null)
+        {
+            isTyping = false;
+            yield break;
+        }
+
+        answerText.text = "";
+
+        string youLine = $"You: {question}";
+        string patientLine = $"Patient: {answer}";
+
+        yield return StartCoroutine(TypeLine(youLine));
+        yield return new WaitForSeconds(linePause);
+
+        answerText.text += "\n\n";
+
+        yield return StartCoroutine(TypeLine(patientLine));
+
+        isTyping = false;
+        typingCoroutine = null;
+
+        if (finishAfterTyping)
+        {
+            waitingForQuestionExit = true;
+
+            if (objectiveText != null)
+                objectiveText.text = "Assessment complete. Press E to continue.";
+        }
+    }
+
+    private IEnumerator TypeLine(string line)
+    {
+        for (int i = 0; i < line.Length; i++)
+        {
+            answerText.text += line[i];
+            yield return new WaitForSeconds(typingSpeed);
+        }
     }
 
     private string GetAnswerForQuestion(MedicalQuestionType questionType)
@@ -208,8 +303,8 @@ public class MedicalScenarioManager : MonoBehaviour
 
     public void GiveMedication(string medicationName)
     {
-        if (currentState != ScenarioState.Questioning &&
-            currentState != ScenarioState.MedicationSelection)
+        if (currentState != ScenarioState.MedicationSelection &&
+            currentState != ScenarioState.InMedkitView)
             return;
 
         if (currentScenario == null)
@@ -230,17 +325,26 @@ public class MedicalScenarioManager : MonoBehaviour
     private void WinScenario()
     {
         currentState = ScenarioState.Success;
-        ShowResult("Success", "Correct medication given.");
+        ShowResult("SUCCESS", "Correct medication given.", successTitleColor);
     }
 
     private void FailScenario(string reason)
     {
         currentState = ScenarioState.Failure;
-        ShowResult("Failure", reason);
+        ShowResult("FAILURE", reason, failureTitleColor);
     }
 
-    private void ShowResult(string title, string body)
+    private void ShowResult(string title, string body, Color titleColor)
     {
+        if (typingCoroutine != null)
+        {
+            StopCoroutine(typingCoroutine);
+            typingCoroutine = null;
+        }
+
+        isTyping = false;
+        waitingForQuestionExit = false;
+
         if (questionPanel != null)
             questionPanel.SetActive(false);
 
@@ -250,29 +354,36 @@ public class MedicalScenarioManager : MonoBehaviour
         if (resultPanel != null)
             resultPanel.SetActive(true);
 
+        if (medkitInstructionUI != null)
+            medkitInstructionUI.SetActive(false);
+
         if (resultTitleText != null)
+        {
             resultTitleText.text = title;
+            resultTitleText.color = titleColor;
+            resultTitleText.fontSize = 44;
+            resultTitleText.alignment = TextAlignmentOptions.Center;
+        }
 
         if (resultBodyText != null)
+        {
             resultBodyText.text = body;
+            resultBodyText.color = resultBodyColor;
+            resultBodyText.fontSize = 28;
+            resultBodyText.alignment = TextAlignmentOptions.Center;
+        }
 
         if (objectiveText != null)
             objectiveText.text = "";
 
-        SetControlsEnabled(false);
+        SetGameplayLocked(true);
         SetCursorState(true);
     }
 
-    private void SetControlsEnabled(bool enabled)
+    private void SetGameplayLocked(bool locked)
     {
-        if (controlsToDisableDuringUI == null)
-            return;
-
-        foreach (Behaviour control in controlsToDisableDuringUI)
-        {
-            if (control != null)
-                control.enabled = enabled;
-        }
+        if (inputManager != null)
+            inputManager.SetGameplayLocked(locked);
     }
 
     private void SetCursorState(bool visible)
