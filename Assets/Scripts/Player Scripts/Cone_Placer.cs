@@ -139,4 +139,13 @@ private Vector3 lastNormal;
             ghost = null;
         }
     }
+
+    public void RegisterConePlaced()
+{
+    placedCones++;
+
+    Debug.Log("VR Cone placed: " + placedCones);
+
+    OnConePlaced?.Invoke(placedCones);
+}
 }
