@@ -2,8 +2,10 @@ using UnityEngine;
 
 public class MedicationItem : Interactable
 {
-    [SerializeField] private string medicationName = "Epinephrine";
+    [SerializeField] private string medicationName;
     [SerializeField] private MedicalScenarioManager scenarioManager;
+    [SerializeField] private Camera mainCamera;
+    [SerializeField] private Camera medkitCamera;
 
     private void Awake()
     {
@@ -18,9 +20,15 @@ public class MedicationItem : Interactable
             return;
         }
 
-        Debug.Log($"Medication used: {medicationName}");
-        scenarioManager.GiveMedication(medicationName);
+        if (medkitCamera != null)
+            medkitCamera.enabled = false;
 
-        gameObject.SetActive(false);
+        if (mainCamera != null)
+            mainCamera.enabled = true;
+
+
+
+        scenarioManager.ExitMedkitView();
+        scenarioManager.GiveMedication(medicationName);
     }
 }

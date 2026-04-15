@@ -8,6 +8,10 @@ public class QuestionAnswerPair
 
     [TextArea(2, 4)]
     public string answer;
+
+    [Header("Voice Clips")]
+    public AudioClip userVoiceClip;
+    public AudioClip patientVoiceClip;
 }
 
 [Serializable]
@@ -22,4 +26,12 @@ public class SubScenarioData
 
     [Header("Key Questions (for feedback later)")]
     public MedicalQuestionType[] keyQuestions;
+
+    [Header("Narrator Clips")]
+    public AudioClip introSceneClip;
+    public AudioClip assessmentObjectiveClip;
+    public AudioClip questioningObjectiveClip;
+    public AudioClip medkitObjectiveClip;
+    public AudioClip successClip;
+    public AudioClip failureClip;
 }

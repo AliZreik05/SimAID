@@ -3,6 +3,11 @@ using UnityEngine;
 public class PatientAssessmentStarter : Interactable
 {
     [SerializeField] private MedicalScenarioManager scenarioManager;
+    [SerializeField] private PatientConversationController conversationController;
+
+    public bool CanBeInteractedWith =>
+        scenarioManager != null &&
+        scenarioManager.CurrentState == MedicalScenarioManager.ScenarioState.WaitingForPatientInteraction;
 
     private void Awake()
     {
@@ -11,11 +16,11 @@ public class PatientAssessmentStarter : Interactable
 
     protected override void Interact()
     {
-        if (!scenarioManager)
-        {
-            Debug.LogWarning("PatientAssessmentStarter: No MedicalScenarioManager assigned.");
+        if (!CanBeInteractedWith)
             return;
-        }
+
+        if (conversationController != null)
+            conversationController.StartConversation();
 
         scenarioManager.BeginPatientAssessment();
     }
