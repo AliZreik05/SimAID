@@ -14,7 +14,7 @@ public class InputManager : MonoBehaviour
     [SerializeField] private bool blockMovementLook = false;
     [SerializeField] private bool allowLookOnly = false;
 
-    void Awake()
+    private void Awake()
     {
         playerInput = new PlayerInput();
         onFoot = playerInput.OnFoot;
@@ -44,30 +44,23 @@ public class InputManager : MonoBehaviour
         }
     }
 
-    void FixedUpdate()
+    private void Update()
     {
-        if (motor == null) return;
-
-        if (blockMovementLook)
+        if (motor != null)
         {
-            motor.ProcessMove(Vector2.zero);
-            return;
+            if (blockMovementLook)
+                motor.ProcessMove(Vector2.zero);
+            else
+                motor.ProcessMove(onFoot.Movement.ReadValue<Vector2>());
         }
 
-        motor.ProcessMove(onFoot.Movement.ReadValue<Vector2>());
-    }
-
-    void LateUpdate()
-    {
-        if (look == null) return;
-
-        if (blockMovementLook && !allowLookOnly)
+        if (look != null)
         {
-            look.ProcessLook(Vector2.zero);
-            return;
+            if (blockMovementLook && !allowLookOnly)
+                look.ProcessLook(Vector2.zero);
+            else
+                look.ProcessLook(onFoot.Look.ReadValue<Vector2>());
         }
-
-        look.ProcessLook(onFoot.Look.ReadValue<Vector2>());
     }
 
     public void SetGameplayLocked(bool locked, bool lookOnly = false)
