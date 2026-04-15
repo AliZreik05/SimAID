@@ -295,124 +295,143 @@ public class MedicalScenarioManager : MonoBehaviour
     }
 
     private IEnumerator PlayOpeningDialogue()
+{
+    isTyping = true;
+
+    if (answerText == null)
     {
-        isTyping = true;
-
-        if (answerText == null)
-        {
-            isTyping = false;
-            yield break;
-        }
-
-        answerText.text = "";
-
-        string youLine = $"You: {openingPlayerLine}";
-        string patientLine = $"Patient: {openingPatientLine}";
-
-        if (dialogueAudioSource != null && openingPlayerVoiceClip != null)
-        {
-            dialogueAudioSource.Stop();
-            dialogueAudioSource.clip = openingPlayerVoiceClip;
-            dialogueAudioSource.Play();
-        }
-
-        yield return StartCoroutine(TypeLine(youLine));
-
-        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
-        yield return new WaitForSeconds(linePause);
-
-        answerText.text += "\n\n";
-
-        if (dialogueAudioSource != null && openingPatientVoiceClip != null)
-        {
-            dialogueAudioSource.Stop();
-            dialogueAudioSource.clip = openingPatientVoiceClip;
-            dialogueAudioSource.Play();
-        }
-
-        yield return StartCoroutine(TypeLine(patientLine));
-
-        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
-        openingDialoguePlayed = true;
         isTyping = false;
-        typingCoroutine = null;
-
-        if (questionPanel != null)
-            questionPanel.SetActive(true);
-
-        if (objectiveText != null)
-    objectiveText.text = $"Ask up to {maxQuestions} questions.";
-
-yield return new WaitForSeconds(0.5f);
-
-if (currentScenario.questioningObjectiveClip != null)
-    PlayNarratorClip(currentScenario.questioningObjectiveClip);
-
-Debug.Log("Opening dialogue finished. Question UI enabled.");
+        yield break;
     }
+
+    answerText.text = "";
+
+    string youLine = $"You: {openingPlayerLine}";
+    string patientLine = $"Patient: {openingPatientLine}";
+
+    if (conversationController != null)
+        conversationController.StopPatientTalking();
+
+    if (dialogueAudioSource != null && openingPlayerVoiceClip != null)
+    {
+        dialogueAudioSource.Stop();
+        dialogueAudioSource.clip = openingPlayerVoiceClip;
+        dialogueAudioSource.Play();
+    }
+
+    yield return StartCoroutine(TypeLine(youLine));
+
+    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+    yield return new WaitForSeconds(linePause);
+
+    answerText.text += "\n\n";
+
+    if (conversationController != null)
+        conversationController.StartPatientTalking();
+
+        yield return new WaitForSeconds(0.1f);
+
+    if (dialogueAudioSource != null && openingPatientVoiceClip != null)
+    {
+        dialogueAudioSource.Stop();
+        dialogueAudioSource.clip = openingPatientVoiceClip;
+        dialogueAudioSource.Play();
+    }
+
+    yield return StartCoroutine(TypeLine(patientLine));
+
+    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+    if (conversationController != null)
+        conversationController.StopPatientTalking();
+
+    openingDialoguePlayed = true;
+    isTyping = false;
+    typingCoroutine = null;
+
+    if (questionPanel != null)
+        questionPanel.SetActive(false);
+
+    if (objectiveText != null)
+        objectiveText.text = $"Ask up to {maxQuestions} questions.";
+
+    yield return new WaitForSeconds(0.5f);
+
+    if (currentScenario.questioningObjectiveClip != null)
+    {
+        PlayNarratorClip(currentScenario.questioningObjectiveClip);
+
+        if (narratorAudioSource != null && narratorAudioSource.isPlaying)
+            yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
+    }
+
+    if (questionPanel != null)
+        questionPanel.SetActive(true);
+
+    Debug.Log("Opening dialogue finished. Question UI enabled.");
+}
 
     public void AskQuestion(MedicalQuestionType questionType, string questionDisplayText)
+{
+    if (currentState != ScenarioState.Questioning)
+        return;
+
+    if (!openingDialoguePlayed)
+        return;
+
+    if (isTyping || waitingForQuestionExit || IsNarratorBusy())
+        return;
+
+    if (questionsAsked >= maxQuestions)
     {
-        if (currentState != ScenarioState.Questioning)
-            return;
-
-        if (!openingDialoguePlayed)
-            return;
-
-        if (isTyping || waitingForQuestionExit)
-            return;
-
-        if (questionsAsked >= maxQuestions)
-        {
-            if (objectiveText != null)
-                objectiveText.text = "Assessment complete. Press E to continue.";
-            return;
-        }
-
-        if (askedQuestions.Contains(questionType))
-        {
-            if (objectiveText != null)
-                objectiveText.text = "You already asked that question.";
-            return;
-        }
-
-        QuestionAnswerPair pair = GetQuestionAnswerPair(questionType);
-        if (pair == null)
-        {
-            Debug.LogWarning($"No Q/A pair found for {questionType}");
-            return;
-        }
-
-        questionsAsked++;
-        askedQuestions.Add(questionType);
-
-        if (answerPanel != null && !answerPanel.activeSelf)
-            answerPanel.SetActive(true);
-
-        if (typingCoroutine != null)
-            StopCoroutine(typingCoroutine);
-
-        if (dialogueAudioSource != null)
-            dialogueAudioSource.Stop();
-
-        int remaining = maxQuestions - questionsAsked;
-        bool isLastQuestion = remaining == 0;
-
         if (objectiveText != null)
-        {
-            objectiveText.text = isLastQuestion
-                ? "Final question..."
-                : $"Question {questionsAsked}/{maxQuestions}. You can ask {remaining} more.";
-        }
-
-        typingCoroutine = StartCoroutine(TypeDialogueWithAudio(pair, questionDisplayText, isLastQuestion));
-
-        Debug.Log($"Question asked: {questionType} | Answer: {pair.answer}");
+            objectiveText.text = "Assessment complete. Press E to continue.";
+        return;
     }
+
+    if (askedQuestions.Contains(questionType))
+    {
+        if (objectiveText != null)
+            objectiveText.text = "You already asked that question.";
+        return;
+    }
+
+    QuestionAnswerPair pair = GetQuestionAnswerPair(questionType);
+    if (pair == null)
+    {
+        Debug.LogWarning($"No Q/A pair found for {questionType}");
+        return;
+    }
+
+    questionsAsked++;
+    askedQuestions.Add(questionType);
+
+    if (answerPanel != null && !answerPanel.activeSelf)
+        answerPanel.SetActive(true);
+
+    if (typingCoroutine != null)
+        StopCoroutine(typingCoroutine);
+
+    if (dialogueAudioSource != null)
+        dialogueAudioSource.Stop();
+
+    int remaining = maxQuestions - questionsAsked;
+    bool isLastQuestion = remaining == 0;
+
+    if (objectiveText != null)
+    {
+        objectiveText.text = isLastQuestion
+            ? "Final question..."
+            : $"Question {questionsAsked}/{maxQuestions}. You can ask {remaining} more.";
+    }
+
+    typingCoroutine = StartCoroutine(TypeDialogueWithAudio(pair, questionDisplayText, isLastQuestion));
+
+    Debug.Log($"Question asked: {questionType} | Answer: {pair.answer}");
+}
 
     public void FinishQuestioning()
     {
@@ -438,6 +457,10 @@ Debug.Log("Opening dialogue finished. Question UI enabled.");
 
         Debug.Log("Questioning finished. Returned to normal player control.");
     }
+    private bool IsNarratorBusy()
+{
+    return narratorAudioSource != null && narratorAudioSource.isPlaying;
+}
 
     public void EnterMedkitView()
     {
@@ -484,59 +507,70 @@ Debug.Log("Opening dialogue finished. Question UI enabled.");
     }
 
     private IEnumerator TypeDialogueWithAudio(QuestionAnswerPair pair, string question, bool finishAfterTyping)
+{
+    isTyping = true;
+
+    if (answerText == null)
     {
-        isTyping = true;
-
-        if (answerText == null)
-        {
-            isTyping = false;
-            yield break;
-        }
-
-        answerText.text = "";
-
-        string youLine = $"You: {question}";
-        string patientLine = $"Patient: {pair.answer}";
-
-        if (dialogueAudioSource != null && pair.userVoiceClip != null)
-        {
-            dialogueAudioSource.Stop();
-            dialogueAudioSource.clip = pair.userVoiceClip;
-            dialogueAudioSource.Play();
-        }
-
-        yield return StartCoroutine(TypeLine(youLine));
-
-        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
-        yield return new WaitForSeconds(linePause);
-
-        answerText.text += "\n\n";
-
-        if (dialogueAudioSource != null && pair.patientVoiceClip != null)
-        {
-            dialogueAudioSource.Stop();
-            dialogueAudioSource.clip = pair.patientVoiceClip;
-            dialogueAudioSource.Play();
-        }
-
-        yield return StartCoroutine(TypeLine(patientLine));
-
-        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
         isTyping = false;
-        typingCoroutine = null;
-
-        if (finishAfterTyping)
-        {
-            waitingForQuestionExit = true;
-
-            if (objectiveText != null)
-                objectiveText.text = "Assessment complete. Press E to continue.";
-        }
+        yield break;
     }
+
+    answerText.text = "";
+
+    string youLine = $"You: {question}";
+    string patientLine = $"Patient: {pair.answer}";
+
+    if (conversationController != null)
+        conversationController.StopPatientTalking();
+
+    if (dialogueAudioSource != null && pair.userVoiceClip != null)
+    {
+        dialogueAudioSource.Stop();
+        dialogueAudioSource.clip = pair.userVoiceClip;
+        dialogueAudioSource.Play();
+    }
+
+    yield return StartCoroutine(TypeLine(youLine));
+
+    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+    yield return new WaitForSeconds(linePause);
+
+    answerText.text += "\n\n";
+
+    if (conversationController != null)
+        conversationController.StartPatientTalking();
+
+        yield return new WaitForSeconds(0.1f);
+
+    if (dialogueAudioSource != null && pair.patientVoiceClip != null)
+    {
+        dialogueAudioSource.Stop();
+        dialogueAudioSource.clip = pair.patientVoiceClip;
+        dialogueAudioSource.Play();
+    }
+
+    yield return StartCoroutine(TypeLine(patientLine));
+
+    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+    if (conversationController != null)
+        conversationController.StopPatientTalking();
+
+    isTyping = false;
+    typingCoroutine = null;
+
+    if (finishAfterTyping)
+    {
+        waitingForQuestionExit = true;
+
+        if (objectiveText != null)
+            objectiveText.text = "Assessment complete. Press E to continue.";
+    }
+}
 
     private IEnumerator TypeLine(string line)
     {

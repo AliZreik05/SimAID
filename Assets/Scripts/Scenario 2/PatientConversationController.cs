@@ -6,8 +6,11 @@ public class PatientConversationController : MonoBehaviour
     [SerializeField] private Animator animator;
     [SerializeField] private Transform player;
 
-    [Header("Animation")]
-    [SerializeField] private string talkingStateName = "Talking";
+    [Header("Animation Parameters")]
+    [SerializeField] private string inConversationParam = "InConversation";
+    [SerializeField] private string isTalkingParam = "IsTalking";
+
+    [Header("Optional Freeze")]
     [SerializeField] private bool stopAtConversationPose = false;
 
     [Header("Rotation")]
@@ -35,7 +38,9 @@ public class PatientConversationController : MonoBehaviour
         if (animator != null)
         {
             animator.applyRootMotion = false;
-            animator.SetBool("IsTalking", true);
+            animator.speed = 1f;
+            animator.SetBool(inConversationParam, true);
+            animator.SetBool(isTalkingParam, false);
 
             if (stopAtConversationPose)
                 StartCoroutine(FreezeAfterOneFrame());
@@ -47,6 +52,29 @@ public class PatientConversationController : MonoBehaviour
         rotateCoroutine = StartCoroutine(FacePlayer());
     }
 
+    public void StartPatientTalking()
+    {
+        if (animator != null)
+        {
+            animator.speed = 1f;
+            animator.SetBool(inConversationParam, true);
+            animator.SetBool(isTalkingParam, true);
+        }
+    }
+
+    public void StopPatientTalking()
+    {
+        if (animator != null)
+        {
+            animator.speed = 1f;
+            animator.SetBool(inConversationParam, true);
+            animator.SetBool(isTalkingParam, false);
+
+            if (stopAtConversationPose)
+                StartCoroutine(FreezeAfterOneFrame());
+        }
+    }
+
     public void EndConversation()
     {
         if (rotateCoroutine != null)
@@ -54,13 +82,21 @@ public class PatientConversationController : MonoBehaviour
             StopCoroutine(rotateCoroutine);
             rotateCoroutine = null;
         }
-        animator.SetBool("IsTalking", false);
+
+        if (animator != null)
+        {
+            animator.speed = 1f;
+            animator.SetBool(isTalkingParam, false);
+            animator.SetBool(inConversationParam, false);
+        }
+
         transform.localPosition = startLocalPosition;
     }
 
     private IEnumerator FreezeAfterOneFrame()
     {
         yield return null;
+
         if (animator != null)
             animator.speed = 0f;
     }
@@ -71,29 +107,29 @@ public class PatientConversationController : MonoBehaviour
             yield break;
 
         while (true)
-{
-    transform.localPosition = new Vector3(
-    transform.localPosition.x,
-    startLocalPosition.y,
-    transform.localPosition.z
-);
+        {
+            transform.localPosition = new Vector3(
+                transform.localPosition.x,
+                startLocalPosition.y,
+                transform.localPosition.z
+            );
 
-    Vector3 dir = player.position - transform.position;
+            Vector3 dir = player.position - transform.position;
 
-    if (rotateOnlyY)
-        dir.y = 0f;
+            if (rotateOnlyY)
+                dir.y = 0f;
 
-    if (dir.sqrMagnitude > 0.001f)
-    {
-        Quaternion targetRot = Quaternion.LookRotation(dir.normalized);
-        transform.rotation = Quaternion.Slerp(
-            transform.rotation,
-            targetRot,
-            rotateSpeed * Time.deltaTime
-        );
-    }
+            if (dir.sqrMagnitude > 0.001f)
+            {
+                Quaternion targetRot = Quaternion.LookRotation(dir.normalized);
+                transform.rotation = Quaternion.Slerp(
+                    transform.rotation,
+                    targetRot,
+                    rotateSpeed * Time.deltaTime
+                );
+            }
 
-    yield return null;
-}
+            yield return null;
+        }
     }
 }
