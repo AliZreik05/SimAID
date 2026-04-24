@@ -46,6 +46,10 @@ public class MedicalScenarioManager : MonoBehaviour
     [SerializeField] private AudioClip openingPlayerVoiceClip;
     [SerializeField] private AudioClip openingPatientVoiceClip;
 
+    [Header("Result Text Styling")]
+[SerializeField] private float resultTitleFontSize = 34f;
+[SerializeField] private float resultBodyFontSize = 25f;
+
     [Header("Intro UI")]
     [SerializeField] private GameObject introFadePanel;
     [SerializeField] private TMP_Text introText;
@@ -237,10 +241,27 @@ public class MedicalScenarioManager : MonoBehaviour
                     : $"Ask up to {maxQuestions} questions.";
         }
         else if (currentState == ScenarioState.MedicationSelection)
+{
+    if (objectiveText != null)
+    {
+        if (inspectedChest && inspectedHand)
         {
-            if (objectiveText != null)
-                objectiveText.text = "Inspection complete. Inspect the chest or hand for more clues, or go to the medkit and choose the correct medication.";
+            objectiveText.text = "Physical inspection complete. Proceed to the medkit and choose the correct medication.";
         }
+        else if (inspectedChest)
+        {
+            objectiveText.text = "Chest inspection complete. You may inspect the hand or proceed to the medkit.";
+        }
+        else if (inspectedHand)
+        {
+            objectiveText.text = "Hand inspection complete. You may inspect the chest or proceed to the medkit.";
+        }
+        else
+        {
+            objectiveText.text = "Inspect the chest or hand for more clues, or go to the medkit and choose the correct medication.";
+        }
+    }
+}
 
         SetGameplayLocked(currentState == ScenarioState.Questioning);
         SetCursorState(currentState == ScenarioState.Questioning);
@@ -728,64 +749,77 @@ public class MedicalScenarioManager : MonoBehaviour
     }
 
     private void WinScenario()
-    {
-        currentState = ScenarioState.Success;
-        PlayNarratorClip(currentScenario.successClip);
-        ShowResult("SUCCESS", "Correct medication given.", successTitleColor);
-    }
+{
+    currentState = ScenarioState.Success;
+    PlayNarratorClip(currentScenario.successClip);
 
-    private void FailScenario(string reason)
-    {
-        currentState = ScenarioState.Failure;
-        PlayNarratorClip(currentScenario.failureClip);
-        ShowResult("FAILURE", reason, failureTitleColor);
-    }
+    string debrief = GenerateDebrief(
+        success: true,
+        reason: "Correct medication given."
+    );
+
+    ShowResult("SUCCESS", debrief, successTitleColor);
+}
+
+private void FailScenario(string reason)
+{
+    currentState = ScenarioState.Failure;
+    PlayNarratorClip(currentScenario.failureClip);
+
+    string debrief = GenerateDebrief(
+        success: false,
+        reason: reason
+    );
+
+    ShowResult("FAILURE", debrief, failureTitleColor);
+}
 
     private void ShowResult(string title, string body, Color titleColor)
+{
+    if (typingCoroutine != null)
     {
-        if (typingCoroutine != null)
-        {
-            StopCoroutine(typingCoroutine);
-            typingCoroutine = null;
-        }
-
-        if (dialogueAudioSource != null)
-            dialogueAudioSource.Stop();
-
-        isTyping = false;
-        waitingForQuestionExit = false;
-
-        if (questionPanel != null) questionPanel.SetActive(false);
-        if (answerPanel != null) answerPanel.SetActive(false);
-        if (resultPanel != null) resultPanel.SetActive(true);
-        if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
-
-        if (conversationController != null)
-            conversationController.EndConversation();
-
-        if (resultTitleText != null)
-        {
-            resultTitleText.text = title;
-            resultTitleText.color = titleColor;
-            resultTitleText.fontSize = 44;
-            resultTitleText.alignment = TextAlignmentOptions.Center;
-        }
-
-        if (resultBodyText != null)
-        {
-            resultBodyText.text = body;
-            resultBodyText.color = resultBodyColor;
-            resultBodyText.fontSize = 28;
-            resultBodyText.alignment = TextAlignmentOptions.Center;
-        }
-
-        if (objectiveText != null)
-            objectiveText.text = "";
-
-        SetGameplayLocked(true);
-        SetCursorState(true);
+        StopCoroutine(typingCoroutine);
+        typingCoroutine = null;
     }
 
+    if (dialogueAudioSource != null)
+        dialogueAudioSource.Stop();
+
+    isTyping = false;
+    waitingForQuestionExit = false;
+
+    if (questionPanel != null) questionPanel.SetActive(false);
+    if (answerPanel != null) answerPanel.SetActive(false);
+    if (resultPanel != null) resultPanel.SetActive(true);
+    if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
+
+    if (conversationController != null)
+        conversationController.EndConversation();
+
+    if (resultTitleText != null)
+    {
+        resultTitleText.text = title;
+        resultTitleText.color = titleColor;
+        resultTitleText.fontSize = resultTitleFontSize;
+        resultTitleText.alignment = TextAlignmentOptions.Center;
+    }
+
+    if (resultBodyText != null)
+    {
+        resultBodyText.text = body;
+        resultBodyText.color = resultBodyColor;
+        resultBodyText.fontSize = resultBodyFontSize;
+        resultBodyText.alignment = TextAlignmentOptions.TopLeft;
+        resultBodyText.enableWordWrapping = true;
+        resultBodyText.overflowMode = TextOverflowModes.Overflow;
+    }
+
+    if (objectiveText != null)
+        objectiveText.text = "";
+
+    SetGameplayLocked(true);
+    SetCursorState(true);
+}
     private void PlayNarratorClip(AudioClip clip)
     {
         if (narratorAudioSource == null || clip == null)
@@ -807,4 +841,178 @@ public class MedicalScenarioManager : MonoBehaviour
         Cursor.visible = visible;
         Cursor.lockState = visible ? CursorLockMode.None : CursorLockMode.Locked;
     }
+   private string GenerateDebrief(bool success, string reason)
+{
+    System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+    sb.AppendLine(reason);
+    sb.AppendLine();
+    sb.AppendLine(GenerateScoreLine(success));
+    sb.AppendLine();
+
+    sb.AppendLine("Assessment summary:");
+
+    if (askedQuestions.Count > 0)
+    {
+        sb.Append("- Questions asked: ");
+
+        for (int i = 0; i < askedQuestions.Count; i++)
+        {
+            sb.Append(FormatQuestionName(askedQuestions[i]));
+
+            if (i < askedQuestions.Count - 1)
+                sb.Append(", ");
+        }
+
+        sb.AppendLine(".");
+    }
+    else
+    {
+        sb.AppendLine("- No focused questions asked.");
+    }
+
+    sb.AppendLine();
+
+    sb.AppendLine("Inspection findings:");
+
+    if (inspectedChest)
+        sb.AppendLine("- Chest: " + ShortenInspectionClue(currentScenario.chestInspectionClue));
+    else
+        sb.AppendLine("- Chest: not inspected.");
+
+    if (inspectedHand)
+        sb.AppendLine("- Hand: " + ShortenInspectionClue(currentScenario.handInspectionClue));
+    else
+        sb.AppendLine("- Hand: not inspected.");
+
+    sb.AppendLine();
+
+    sb.AppendLine("Missed points:");
+
+    bool missedAnything = false;
+
+    if (currentScenario.keyQuestions != null)
+    {
+        foreach (MedicalQuestionType keyQuestion in currentScenario.keyQuestions)
+        {
+            if (!askedQuestions.Contains(keyQuestion))
+            {
+                sb.AppendLine("- Missed: " + FormatQuestionName(keyQuestion) + ".");
+                missedAnything = true;
+            }
+        }
+    }
+
+    if (!inspectedChest)
+    {
+        sb.AppendLine("- Missed: chest inspection.");
+        missedAnything = true;
+    }
+
+    if (!inspectedHand)
+    {
+        sb.AppendLine("- Missed: hand inspection.");
+        missedAnything = true;
+    }
+
+    if (!missedAnything)
+        sb.AppendLine("- No major assessment steps missed.");
+
+    sb.AppendLine();
+
+    if (success)
+        sb.AppendLine($"Decision: {currentScenario.correctMedication} was correct.");
+    else
+        sb.AppendLine($"Correct treatment: {currentScenario.correctMedication}.");
+
+    return sb.ToString();
+}
+private string GenerateScoreLine(bool success)
+{
+    int score = 0;
+    int maxScore = 0;
+
+    if (currentScenario.keyQuestions != null)
+    {
+        maxScore += currentScenario.keyQuestions.Length;
+
+        foreach (MedicalQuestionType keyQuestion in currentScenario.keyQuestions)
+        {
+            if (askedQuestions.Contains(keyQuestion))
+                score++;
+        }
+    }
+
+    // Chest + hand inspection
+    maxScore += 2;
+
+    if (inspectedChest)
+        score++;
+
+    if (inspectedHand)
+        score++;
+
+    // Medication decision
+    maxScore += 2;
+
+    if (success)
+        score += 2;
+
+    string label = GetScoreLabel(score, maxScore);
+
+    return $"Clinical Assessment Score: {score}/{maxScore} — {label}";
+}
+private string FormatQuestionName(MedicalQuestionType questionType)
+{
+    switch (questionType)
+    {
+        case MedicalQuestionType.CurrentFeeling:
+            return "current symptoms";
+
+        case MedicalQuestionType.Breathing:
+            return "breathing difficulty";
+
+        case MedicalQuestionType.Trigger:
+            return "possible trigger or exposure";
+
+        case MedicalQuestionType.Throat:
+            return "throat tightness or swelling";
+
+        case MedicalQuestionType.GI:
+            return "gastrointestinal symptoms";
+
+        case MedicalQuestionType.AsthmaHistory:
+            return "asthma history";
+
+        default:
+            return questionType.ToString();
+    }
+}
+private string GetScoreLabel(int score, int maxScore)
+{
+    float percentage = maxScore == 0 ? 0f : (float)score / maxScore;
+
+    if (percentage >= 0.85f)
+        return "Excellent assessment";
+
+    if (percentage >= 0.65f)
+        return "Good assessment";
+
+    if (percentage >= 0.45f)
+        return "Needs improvement";
+
+    return "Incomplete assessment";
+}
+private string ShortenInspectionClue(string clue)
+{
+    if (string.IsNullOrWhiteSpace(clue))
+        return "No clear finding.";
+
+    clue = clue.Trim();
+
+    if (clue.Length <= 85)
+        return clue;
+
+    return clue.Substring(0, 82) + "...";
+}
 }
