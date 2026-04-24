@@ -27,6 +27,10 @@ public class SubScenarioData
     [Header("Key Questions (for feedback later)")]
     public MedicalQuestionType[] keyQuestions;
 
+    [Header("Inspection Clues")]
+    [TextArea(2, 4)] public string chestInspectionClue;
+    [TextArea(2, 4)] public string handInspectionClue;
+
     [Header("Narrator Clips")]
     public AudioClip introSceneClip;
     public AudioClip assessmentObjectiveClip;

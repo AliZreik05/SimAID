@@ -23,5 +23,7 @@ public class PatientAssessmentStarter : Interactable
             conversationController.StartConversation();
 
         scenarioManager.BeginPatientAssessment();
+
+        gameObject.SetActive(false);
     }
 }

@@ -13,6 +13,7 @@ public class MedicalScenarioManager : MonoBehaviour
         WaitingForPatientInteraction,
         Questioning,
         MedicationSelection,
+        InspectionView,
         InMedkitView,
         Success,
         Failure
@@ -77,6 +78,10 @@ public class MedicalScenarioManager : MonoBehaviour
     private SubScenarioData currentScenario;
     private ScenarioState currentState = ScenarioState.NotStarted;
 
+    private bool inspectedChest = false;
+    private bool inspectedHand = false;
+    private ScenarioState stateBeforeInspection;
+
     private int questionsAsked = 0;
     private readonly List<MedicalQuestionType> askedQuestions = new();
 
@@ -88,6 +93,14 @@ public class MedicalScenarioManager : MonoBehaviour
 
     public ScenarioState CurrentState => currentState;
     public bool CanOpenMedkit => currentState == ScenarioState.MedicationSelection;
+
+    public bool CanInspect =>
+    currentState == ScenarioState.MedicationSelection &&
+    Time.time >= inspectionUnlockTime;
+
+    public bool InspectedChest => inspectedChest;
+    public bool InspectedHand => inspectedHand;
+    private float inspectionUnlockTime = 0f;
 
     private void Start()
     {
@@ -115,8 +128,12 @@ public class MedicalScenarioManager : MonoBehaviour
         currentScenario = subScenarios[Random.Range(0, subScenarios.Length)];
         currentState = ScenarioState.Intro;
 
+        inspectionUnlockTime = 0f;
+
         questionsAsked = 0;
         askedQuestions.Clear();
+        inspectedChest = false;
+        inspectedHand = false;
 
         if (typingCoroutine != null)
         {
@@ -155,64 +172,141 @@ public class MedicalScenarioManager : MonoBehaviour
         Debug.Log($"Selected scenario: {currentScenario.scenarioName}");
     }
 
+    public string GetInspectionClue(InspectionPartType partType)
+    {
+        if (currentScenario == null)
+            return "";
+
+        return partType == InspectionPartType.Chest
+            ? currentScenario.chestInspectionClue
+            : currentScenario.handInspectionClue;
+    }
+
+    public void EnterInspectionView(InspectionPartType partType)
+    {
+        if (!CanInspect)
+            return;
+
+        stateBeforeInspection = currentState;
+        currentState = ScenarioState.InspectionView;
+
+        if (questionPanel != null)
+            questionPanel.SetActive(false);
+
+        if (answerPanel != null)
+            answerPanel.SetActive(false);
+
+        if (medkitInstructionUI != null)
+            medkitInstructionUI.SetActive(false);
+
+        if (dialogueAudioSource != null)
+            dialogueAudioSource.Stop();
+
+        if (narratorAudioSource != null)
+            narratorAudioSource.Stop();
+
+        SetGameplayLocked(true);
+        SetCursorState(true);
+
+        if (partType == InspectionPartType.Chest)
+            inspectedChest = true;
+        else
+            inspectedHand = true;
+
+        Debug.Log($"Entered inspection view: {partType}");
+    }
+
+    public void ExitInspectionView(InspectionPartType partType)
+    {
+        if (currentState != ScenarioState.InspectionView)
+            return;
+
+        currentState = stateBeforeInspection;
+
+        if (currentState == ScenarioState.Questioning)
+        {
+            if (questionPanel != null && openingDialoguePlayed && !isTyping && !waitingForQuestionExit)
+                questionPanel.SetActive(true);
+
+            if (answerPanel != null)
+                answerPanel.SetActive(true);
+
+            if (objectiveText != null)
+                objectiveText.text = waitingForQuestionExit
+                    ? "Assessment complete. Press E to continue."
+                    : $"Ask up to {maxQuestions} questions.";
+        }
+        else if (currentState == ScenarioState.MedicationSelection)
+        {
+            if (objectiveText != null)
+                objectiveText.text = "Inspection complete. Inspect the chest or hand for more clues, or go to the medkit and choose the correct medication.";
+        }
+
+        SetGameplayLocked(currentState == ScenarioState.Questioning);
+        SetCursorState(currentState == ScenarioState.Questioning);
+
+        Debug.Log($"Exited inspection view: {partType}");
+    }
+
     private IEnumerator IntroSequence()
-{
-    SetGameplayLocked(true);
-    SetCursorState(false);
+    {
+        SetGameplayLocked(true);
+        SetCursorState(false);
 
-    if (playerLook != null && introLookTarget != null)
-        playerLook.BeginForcedLook(introLookTarget, lookRotateSpeed);
+        if (playerLook != null && introLookTarget != null)
+            playerLook.BeginForcedLook(introLookTarget, lookRotateSpeed);
 
-    if (questionPanel != null) questionPanel.SetActive(false);
-    if (answerPanel != null) answerPanel.SetActive(false);
-    if (resultPanel != null) resultPanel.SetActive(false);
-    if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
+        if (questionPanel != null) questionPanel.SetActive(false);
+        if (answerPanel != null) answerPanel.SetActive(false);
+        if (resultPanel != null) resultPanel.SetActive(false);
+        if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
 
-    if (introFadePanel != null)
-        introFadePanel.SetActive(true);
+        if (introFadePanel != null)
+            introFadePanel.SetActive(true);
 
-    if (introText != null)
-        introText.text = "";
+        if (introText != null)
+            introText.text = "";
 
-    yield return new WaitForSeconds(0.5f);
-    yield return StartCoroutine(FadeIntroPanel(1f, 0.3f));
+        yield return new WaitForSeconds(0.5f);
+        yield return StartCoroutine(FadeIntroPanel(1f, 0.3f));
 
-    PlayNarratorClip(currentScenario.introSceneClip);
-    yield return StartCoroutine(TypeIntroSequenceLine(
-        "You arrive at a restaurant and notice a distressed individual.", 0.4f));
+        PlayNarratorClip(currentScenario.introSceneClip);
+        yield return StartCoroutine(TypeIntroSequenceLine(
+            "You arrive at a restaurant and notice a distressed individual.", 0.4f));
 
-    if (narratorAudioSource != null && narratorAudioSource.isPlaying)
-        yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
+        if (narratorAudioSource != null && narratorAudioSource.isPlaying)
+            yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
 
-    if (introText != null)
-        introText.text = "";
-    yield return new WaitForSeconds(0.35f);
+        if (introText != null)
+            introText.text = "";
+        yield return new WaitForSeconds(0.35f);
 
-    PlayNarratorClip(currentScenario.assessmentObjectiveClip);
-    yield return StartCoroutine(TypeIntroSequenceLine(
-        "Approach the patient and begin assessment.", 0.4f));
+        PlayNarratorClip(currentScenario.assessmentObjectiveClip);
+        yield return StartCoroutine(TypeIntroSequenceLine(
+            "Approach the patient and begin assessment.", 0.4f));
 
-    if (narratorAudioSource != null && narratorAudioSource.isPlaying)
-        yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
+        if (narratorAudioSource != null && narratorAudioSource.isPlaying)
+            yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
 
-    currentState = ScenarioState.WaitingForPatientInteraction;
-    introFinished = true;
+        currentState = ScenarioState.WaitingForPatientInteraction;
+        introFinished = true;
 
-    if (introText != null)
-        introText.text = "";
+        if (introText != null)
+            introText.text = "";
 
-    if (introFadePanel != null)
-        introFadePanel.SetActive(false);
+        if (introFadePanel != null)
+            introFadePanel.SetActive(false);
 
-    if (objectiveText != null)
-        objectiveText.text = "Approach the patient and begin assessment.";
+        if (objectiveText != null)
+            objectiveText.text = "Approach the patient and begin assessment.";
 
-    SetGameplayLocked(false);
-    SetCursorState(false);
+        SetGameplayLocked(false);
+        SetCursorState(false);
 
-    if (playerLook != null)
-        playerLook.EndForcedLook();
-}
+        if (playerLook != null)
+            playerLook.EndForcedLook();
+    }
+
     private IEnumerator FadeIntroPanel(float fromAlpha, float toAlpha)
     {
         if (introFadePanel == null)
@@ -263,154 +357,32 @@ public class MedicalScenarioManager : MonoBehaviour
     }
 
     public void BeginPatientAssessment()
-    {
-        if (currentState != ScenarioState.WaitingForPatientInteraction || !introFinished)
-            return;
-
-        currentState = ScenarioState.Questioning;
-        openingDialoguePlayed = false;
-
-        if (questionPanel != null) questionPanel.SetActive(false);
-        if (answerPanel != null) answerPanel.SetActive(true);
-        if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
-
-        if (objectiveText != null)
-            objectiveText.text = "Listen and assess the patient.";
-
-        if (conversationController != null)
-            conversationController.StartConversation();
-
-        SetGameplayLocked(true);
-        SetCursorState(true);
-
-        if (typingCoroutine != null)
-            StopCoroutine(typingCoroutine);
-
-        if (dialogueAudioSource != null)
-            dialogueAudioSource.Stop();
-
-        typingCoroutine = StartCoroutine(PlayOpeningDialogue());
-
-        Debug.Log("Patient interaction started. Opening dialogue playing.");
-    }
-
-    private IEnumerator PlayOpeningDialogue()
 {
-    isTyping = true;
+    if (currentState != ScenarioState.WaitingForPatientInteraction || !introFinished)
+        return;
 
-    if (answerText == null)
-    {
-        isTyping = false;
-        yield break;
-    }
+    currentState = ScenarioState.Questioning;
+    openingDialoguePlayed = false;
 
-    answerText.text = "";
-
-    string youLine = $"You: {openingPlayerLine}";
-    string patientLine = $"Patient: {openingPatientLine}";
-
-    if (conversationController != null)
-        conversationController.StopPatientTalking();
-
-    if (dialogueAudioSource != null && openingPlayerVoiceClip != null)
-    {
-        dialogueAudioSource.Stop();
-        dialogueAudioSource.clip = openingPlayerVoiceClip;
-        dialogueAudioSource.Play();
-    }
-
-    yield return StartCoroutine(TypeLine(youLine));
-
-    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
-    yield return new WaitForSeconds(linePause);
-
-    answerText.text += "\n\n";
-
-    if (conversationController != null)
-        conversationController.StartPatientTalking();
-
-        yield return new WaitForSeconds(0.1f);
-
-    if (dialogueAudioSource != null && openingPatientVoiceClip != null)
-    {
-        dialogueAudioSource.Stop();
-        dialogueAudioSource.clip = openingPatientVoiceClip;
-        dialogueAudioSource.Play();
-    }
-
-    yield return StartCoroutine(TypeLine(patientLine));
-
-    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
-    if (conversationController != null)
-        conversationController.StopPatientTalking();
-
-    openingDialoguePlayed = true;
-    isTyping = false;
-    typingCoroutine = null;
-
-    if (questionPanel != null)
-        questionPanel.SetActive(false);
+    if (questionPanel != null) questionPanel.SetActive(false);
+    if (answerPanel != null) answerPanel.SetActive(true);
+    if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
 
     if (objectiveText != null)
-        objectiveText.text = $"Ask up to {maxQuestions} questions.";
+        objectiveText.text = "Listen and assess the patient.";
 
-    yield return new WaitForSeconds(0.5f);
+    if (conversationController != null)
+        conversationController.StartConversation();
 
-    if (currentScenario.questioningObjectiveClip != null)
-    {
-        PlayNarratorClip(currentScenario.questioningObjectiveClip);
+    // Lock gameplay while in question mode
+    SetGameplayLocked(true);
 
-        if (narratorAudioSource != null && narratorAudioSource.isPlaying)
-            yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
-    }
+    // Keep look script enabled unless your InputManager handles it differently
+    if (playerLook != null)
+        playerLook.enabled = true;
 
-    if (questionPanel != null)
-        questionPanel.SetActive(true);
-
-    Debug.Log("Opening dialogue finished. Question UI enabled.");
-}
-
-    public void AskQuestion(MedicalQuestionType questionType, string questionDisplayText)
-{
-    if (currentState != ScenarioState.Questioning)
-        return;
-
-    if (!openingDialoguePlayed)
-        return;
-
-    if (isTyping || waitingForQuestionExit || IsNarratorBusy())
-        return;
-
-    if (questionsAsked >= maxQuestions)
-    {
-        if (objectiveText != null)
-            objectiveText.text = "Assessment complete. Press E to continue.";
-        return;
-    }
-
-    if (askedQuestions.Contains(questionType))
-    {
-        if (objectiveText != null)
-            objectiveText.text = "You already asked that question.";
-        return;
-    }
-
-    QuestionAnswerPair pair = GetQuestionAnswerPair(questionType);
-    if (pair == null)
-    {
-        Debug.LogWarning($"No Q/A pair found for {questionType}");
-        return;
-    }
-
-    questionsAsked++;
-    askedQuestions.Add(questionType);
-
-    if (answerPanel != null && !answerPanel.activeSelf)
-        answerPanel.SetActive(true);
+    Cursor.visible = true;
+    Cursor.lockState = CursorLockMode.None;
 
     if (typingCoroutine != null)
         StopCoroutine(typingCoroutine);
@@ -418,49 +390,185 @@ public class MedicalScenarioManager : MonoBehaviour
     if (dialogueAudioSource != null)
         dialogueAudioSource.Stop();
 
-    int remaining = maxQuestions - questionsAsked;
-    bool isLastQuestion = remaining == 0;
+    typingCoroutine = StartCoroutine(PlayOpeningDialogue());
 
-    if (objectiveText != null)
+    Debug.Log("Patient interaction started. Opening dialogue playing.");
+}
+    private IEnumerator PlayOpeningDialogue()
     {
-        objectiveText.text = isLastQuestion
-            ? "Final question..."
-            : $"Question {questionsAsked}/{maxQuestions}. You can ask {remaining} more.";
+        isTyping = true;
+
+        if (answerText == null)
+        {
+            isTyping = false;
+            yield break;
+        }
+
+        answerText.text = "";
+
+        string youLine = $"You: {openingPlayerLine}";
+        string patientLine = $"Patient: {openingPatientLine}";
+
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
+
+        if (dialogueAudioSource != null && openingPlayerVoiceClip != null)
+        {
+            dialogueAudioSource.Stop();
+            dialogueAudioSource.clip = openingPlayerVoiceClip;
+            dialogueAudioSource.Play();
+        }
+
+        yield return StartCoroutine(TypeLine(youLine));
+
+        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+        yield return new WaitForSeconds(linePause);
+
+        answerText.text += "\n\n";
+
+        if (conversationController != null)
+            conversationController.StartPatientTalking();
+
+        yield return new WaitForSeconds(0.1f);
+
+        if (dialogueAudioSource != null && openingPatientVoiceClip != null)
+        {
+            dialogueAudioSource.Stop();
+            dialogueAudioSource.clip = openingPatientVoiceClip;
+            dialogueAudioSource.Play();
+        }
+
+        yield return StartCoroutine(TypeLine(patientLine));
+
+        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
+
+        openingDialoguePlayed = true;
+        isTyping = false;
+        typingCoroutine = null;
+
+        if (questionPanel != null)
+            questionPanel.SetActive(false);
+
+        if (objectiveText != null)
+            objectiveText.text = $"Ask up to {maxQuestions} questions.";
+
+        yield return new WaitForSeconds(0.5f);
+
+        if (currentScenario.questioningObjectiveClip != null)
+        {
+            PlayNarratorClip(currentScenario.questioningObjectiveClip);
+
+            if (narratorAudioSource != null && narratorAudioSource.isPlaying)
+                yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
+        }
+
+        if (questionPanel != null)
+            questionPanel.SetActive(true);
+
+        Debug.Log("Opening dialogue finished. Question UI enabled.");
     }
 
-    typingCoroutine = StartCoroutine(TypeDialogueWithAudio(pair, questionDisplayText, isLastQuestion));
-
-    Debug.Log($"Question asked: {questionType} | Answer: {pair.answer}");
-}
-
-    public void FinishQuestioning()
+    public void AskQuestion(MedicalQuestionType questionType, string questionDisplayText)
     {
-        currentState = ScenarioState.MedicationSelection;
+        if (currentState != ScenarioState.Questioning)
+            return;
 
-        if (questionPanel != null) questionPanel.SetActive(false);
-        if (answerPanel != null) answerPanel.SetActive(false);
-        if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
+        if (!openingDialoguePlayed)
+            return;
+
+        if (isTyping || waitingForQuestionExit || IsNarratorBusy())
+            return;
+
+        if (questionsAsked >= maxQuestions)
+        {
+            if (objectiveText != null)
+                objectiveText.text = "Assessment complete. Press E to continue.";
+            return;
+        }
+
+        if (askedQuestions.Contains(questionType))
+        {
+            if (objectiveText != null)
+                objectiveText.text = "You already asked that question.";
+            return;
+        }
+
+        QuestionAnswerPair pair = GetQuestionAnswerPair(questionType);
+        if (pair == null)
+        {
+            Debug.LogWarning($"No Q/A pair found for {questionType}");
+            return;
+        }
+
+        questionsAsked++;
+        askedQuestions.Add(questionType);
+
+        if (answerPanel != null && !answerPanel.activeSelf)
+            answerPanel.SetActive(true);
+
+        if (typingCoroutine != null)
+            StopCoroutine(typingCoroutine);
 
         if (dialogueAudioSource != null)
             dialogueAudioSource.Stop();
 
+        int remaining = maxQuestions - questionsAsked;
+        bool isLastQuestion = remaining == 0;
+
         if (objectiveText != null)
-            objectiveText.text = "Assessment complete. Go to the medkit and choose the correct medication.";
+        {
+            objectiveText.text = isLastQuestion
+                ? "Final question..."
+                : $"Question {questionsAsked}/{maxQuestions}. You can ask {remaining} more.";
+        }
 
-        PlayNarratorClip(currentScenario.medkitObjectiveClip);
+        typingCoroutine = StartCoroutine(TypeDialogueWithAudio(pair, questionDisplayText, isLastQuestion));
 
-        if (conversationController != null)
-            conversationController.EndConversation();
-
-        SetGameplayLocked(false);
-        SetCursorState(false);
-
-        Debug.Log("Questioning finished. Returned to normal player control.");
+        Debug.Log($"Question asked: {questionType} | Answer: {pair.answer}");
     }
-    private bool IsNarratorBusy()
+
+    public void FinishQuestioning()
 {
-    return narratorAudioSource != null && narratorAudioSource.isPlaying;
+    currentState = ScenarioState.MedicationSelection;
+    inspectionUnlockTime = Time.time + 0.35f;
+
+    if (questionPanel != null) questionPanel.SetActive(false);
+    if (answerPanel != null) answerPanel.SetActive(false);
+    if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
+
+    if (dialogueAudioSource != null)
+        dialogueAudioSource.Stop();
+
+    if (objectiveText != null)
+        objectiveText.text = "Assessment complete. Inspect the chest or hand for more clues, or go to the medkit and choose the correct medication.";
+
+    if (conversationController != null)
+        conversationController.EndConversation();
+
+    // Explicitly restore player look
+    if (playerLook != null)
+        playerLook.enabled = true;
+
+    // Explicitly unlock gameplay
+    SetGameplayLocked(false);
+
+    // Restore normal in-game cursor state
+    Cursor.visible = false;
+    Cursor.lockState = CursorLockMode.Locked;
+
+    Debug.Log("Questioning finished. Returned to normal player control.");
 }
+
+    private bool IsNarratorBusy()
+    {
+        return narratorAudioSource != null && narratorAudioSource.isPlaying;
+    }
 
     public void EnterMedkitView()
     {
@@ -498,7 +606,7 @@ public class MedicalScenarioManager : MonoBehaviour
             medkitInstructionUI.SetActive(false);
 
         if (objectiveText != null)
-            objectiveText.text = "Choose the correct medication.";
+            objectiveText.text = "Inspect the chest or hand for more clues, or go to the medkit and choose the correct medication.";
 
         SetGameplayLocked(false);
         SetCursorState(false);
@@ -507,70 +615,70 @@ public class MedicalScenarioManager : MonoBehaviour
     }
 
     private IEnumerator TypeDialogueWithAudio(QuestionAnswerPair pair, string question, bool finishAfterTyping)
-{
-    isTyping = true;
-
-    if (answerText == null)
     {
-        isTyping = false;
-        yield break;
-    }
+        isTyping = true;
 
-    answerText.text = "";
+        if (answerText == null)
+        {
+            isTyping = false;
+            yield break;
+        }
 
-    string youLine = $"You: {question}";
-    string patientLine = $"Patient: {pair.answer}";
+        answerText.text = "";
 
-    if (conversationController != null)
-        conversationController.StopPatientTalking();
+        string youLine = $"You: {question}";
+        string patientLine = $"Patient: {pair.answer}";
 
-    if (dialogueAudioSource != null && pair.userVoiceClip != null)
-    {
-        dialogueAudioSource.Stop();
-        dialogueAudioSource.clip = pair.userVoiceClip;
-        dialogueAudioSource.Play();
-    }
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
 
-    yield return StartCoroutine(TypeLine(youLine));
+        if (dialogueAudioSource != null && pair.userVoiceClip != null)
+        {
+            dialogueAudioSource.Stop();
+            dialogueAudioSource.clip = pair.userVoiceClip;
+            dialogueAudioSource.Play();
+        }
 
-    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+        yield return StartCoroutine(TypeLine(youLine));
 
-    yield return new WaitForSeconds(linePause);
+        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
 
-    answerText.text += "\n\n";
+        yield return new WaitForSeconds(linePause);
 
-    if (conversationController != null)
-        conversationController.StartPatientTalking();
+        answerText.text += "\n\n";
+
+        if (conversationController != null)
+            conversationController.StartPatientTalking();
 
         yield return new WaitForSeconds(0.1f);
 
-    if (dialogueAudioSource != null && pair.patientVoiceClip != null)
-    {
-        dialogueAudioSource.Stop();
-        dialogueAudioSource.clip = pair.patientVoiceClip;
-        dialogueAudioSource.Play();
+        if (dialogueAudioSource != null && pair.patientVoiceClip != null)
+        {
+            dialogueAudioSource.Stop();
+            dialogueAudioSource.clip = pair.patientVoiceClip;
+            dialogueAudioSource.Play();
+        }
+
+        yield return StartCoroutine(TypeLine(patientLine));
+
+        if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
+            yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
+
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
+
+        isTyping = false;
+        typingCoroutine = null;
+
+        if (finishAfterTyping)
+        {
+            waitingForQuestionExit = true;
+
+            if (objectiveText != null)
+                objectiveText.text = "Assessment complete. Press E to continue.";
+        }
     }
-
-    yield return StartCoroutine(TypeLine(patientLine));
-
-    if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
-        yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
-
-    if (conversationController != null)
-        conversationController.StopPatientTalking();
-
-    isTyping = false;
-    typingCoroutine = null;
-
-    if (finishAfterTyping)
-    {
-        waitingForQuestionExit = true;
-
-        if (objectiveText != null)
-            objectiveText.text = "Assessment complete. Press E to continue.";
-    }
-}
 
     private IEnumerator TypeLine(string line)
     {
