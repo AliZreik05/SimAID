@@ -29,6 +29,9 @@ public class MedicalScenarioManager : MonoBehaviour
 
     [Header("Question Settings")]
     [SerializeField] private int maxQuestions = 3;
+    [Header("Patient")]
+[SerializeField] private PatientConversationController conversationController;
+[SerializeField] private AnaphylaxisPatientController patientAnimationController;
 
     [Header("Typing Settings")]
     [SerializeField] private float typingSpeed = 0.025f;
@@ -76,8 +79,6 @@ public class MedicalScenarioManager : MonoBehaviour
     [SerializeField] private PlayerLook playerLook;
     [SerializeField] private InputManager inputManager;
 
-    [Header("Patient")]
-    [SerializeField] private PatientConversationController conversationController;
 
     private SubScenarioData currentScenario;
     private ScenarioState currentState = ScenarioState.NotStarted;
@@ -85,6 +86,8 @@ public class MedicalScenarioManager : MonoBehaviour
     private bool inspectedChest = false;
     private bool inspectedHand = false;
     private ScenarioState stateBeforeInspection;
+
+    
 
     private int questionsAsked = 0;
     private readonly List<MedicalQuestionType> askedQuestions = new();
@@ -748,30 +751,52 @@ public class MedicalScenarioManager : MonoBehaviour
         }
     }
 
-    private void WinScenario()
+   private void WinScenario()
 {
     currentState = ScenarioState.Success;
-    PlayNarratorClip(currentScenario.successClip);
 
-    string debrief = GenerateDebrief(
-        success: true,
-        reason: "Correct medication given."
-    );
+    if (conversationController != null)
+        conversationController.EndConversation();
 
-    ShowResult("SUCCESS", debrief, successTitleColor);
+    if (patientAnimationController != null)
+        patientAnimationController.TriggerRecover();
+
+    if (objectiveText != null)
+        objectiveText.text = "Patient is stabilizing...";
+
+
+    if (narratorAudioSource != null && currentScenario.successVoiceClip != null)
+    {
+        narratorAudioSource.Stop();
+        narratorAudioSource.clip = currentScenario.successVoiceClip;
+        narratorAudioSource.Play();
+    }
+
+    StartCoroutine(PlayOutcomeAndShowResult(true));
 }
 
 private void FailScenario(string reason)
 {
     currentState = ScenarioState.Failure;
-    PlayNarratorClip(currentScenario.failureClip);
 
-    string debrief = GenerateDebrief(
-        success: false,
-        reason: reason
-    );
+    if (conversationController != null)
+        conversationController.EndConversation();
 
-    ShowResult("FAILURE", debrief, failureTitleColor);
+    if (patientAnimationController != null)
+        patientAnimationController.TriggerCollapse();
+
+    if (objectiveText != null)
+        objectiveText.text = "Patient condition worsening...";
+
+
+    if (narratorAudioSource != null && currentScenario.failureVoiceClip != null)
+    {
+        narratorAudioSource.Stop();
+        narratorAudioSource.clip = currentScenario.failureVoiceClip;
+        narratorAudioSource.Play();
+    }
+
+    StartCoroutine(PlayOutcomeAndShowResult(false, reason));
 }
 
     private void ShowResult(string title, string body, Color titleColor)
@@ -1034,5 +1059,26 @@ public bool ShouldShowPaleHand()
 public bool ShouldShowRespiratoryDistress()
 {
     return currentScenario != null && currentScenario.showRespiratoryDistress;
+}
+
+private IEnumerator PlayOutcomeAndShowResult(bool success, string failReason = "")
+{
+    float waitTime = 2.5f;
+
+    if (narratorAudioSource != null && narratorAudioSource.clip != null)
+        waitTime = narratorAudioSource.clip.length;
+
+    yield return new WaitForSeconds(waitTime);
+
+    if (conversationController != null)
+        conversationController.StopPatientTalking();
+
+    string debrief = GenerateDebrief(
+        success,
+        success ? "Correct medication given." : failReason
+    );
+
+    ShowResult(success ? "SUCCESS" : "FAILURE", debrief,
+        success ? successTitleColor : failureTitleColor);
 }
 }

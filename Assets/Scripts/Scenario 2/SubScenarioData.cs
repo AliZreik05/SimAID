@@ -14,6 +14,7 @@ public class QuestionAnswerPair
     public AudioClip patientVoiceClip;
 }
 
+
 [Serializable]
 public class SubScenarioData
 {
@@ -43,4 +44,13 @@ public bool showHandRash;
 public bool showChestRedness;
 public bool showPaleHand;
 public bool showRespiratoryDistress;
+
+[Header("Outcome Dialogue")]
+[TextArea(2,4)] public string successDialogue;
+[TextArea(2,4)] public string failureDialogue;
+
+[Header("Outcome Audio")]
+public AudioClip successVoiceClip;
+public AudioClip failureVoiceClip;
+
 }
