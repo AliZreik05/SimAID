@@ -1015,4 +1015,24 @@ private string ShortenInspectionClue(string clue)
 
     return clue.Substring(0, 82) + "...";
 }
+
+public bool ShouldShowHandRash()
+{
+    return currentScenario != null && currentScenario.showHandRash;
+}
+
+public bool ShouldShowChestRedness()
+{
+    return currentScenario != null && currentScenario.showChestRedness;
+}
+
+public bool ShouldShowPaleHand()
+{
+    return currentScenario != null && currentScenario.showPaleHand;
+}
+
+public bool ShouldShowRespiratoryDistress()
+{
+    return currentScenario != null && currentScenario.showRespiratoryDistress;
+}
 }

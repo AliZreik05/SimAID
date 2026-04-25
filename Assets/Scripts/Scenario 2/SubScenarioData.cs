@@ -38,4 +38,9 @@ public class SubScenarioData
     public AudioClip medkitObjectiveClip;
     public AudioClip successClip;
     public AudioClip failureClip;
+    [Header("Inspection Visual Findings")]
+public bool showHandRash;
+public bool showChestRedness;
+public bool showPaleHand;
+public bool showRespiratoryDistress;
 }
