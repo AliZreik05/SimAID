@@ -9,46 +9,33 @@ public class InspectionManager : MonoBehaviour
     [Header("Cameras")]
     [SerializeField] private Camera mainCamera;
     [SerializeField] private Camera inspectionCamera;
+
     [Header("Respiratory Distress Animation")]
-[SerializeField] private ChestBreathingController chestBreathingController;
+    [SerializeField] private ChestBreathingController chestBreathingController;
 
     [Header("Inspection Objects")]
     [SerializeField] private GameObject inspectionBackground;
     [SerializeField] private GameObject chestInspectionObject;
     [SerializeField] private GameObject handInspectionObject;
 
-private bool chestInspected = false;
-private bool handInspected = false;
-
-public bool ChestInspected => chestInspected;
-public bool HandInspected => handInspected;
-
     [Header("Actual Meshes To Rotate")]
     [SerializeField] private Transform chestMeshToRotate;
     [SerializeField] private Transform handMeshToRotate;
 
     [Header("Optional GameObject Visual Findings")]
-    [Tooltip("Use this if hand rash is made of separate objects/spots.")]
     [SerializeField] private GameObject handRashVisuals;
-
-    [Tooltip("Use this if chest redness is made of a separate overlay object.")]
     [SerializeField] private GameObject chestRednessVisuals;
-
     [SerializeField] private GameObject respiratoryDistressVisuals;
 
     [Header("Material-Based Hand Visuals")]
-    [Tooltip("Renderer whose material changes for normal/rash/pale hand.")]
     [SerializeField] private Renderer handRenderer;
-
     [SerializeField] private int handMaterialIndex = 0;
     [SerializeField] private Material handNormalMaterial;
     [SerializeField] private Material handRashMaterial;
     [SerializeField] private Material handPaleMaterial;
 
     [Header("Material-Based Chest Visuals")]
-    [Tooltip("Renderer whose material changes for normal/red chest.")]
     [SerializeField] private Renderer chestRenderer;
-
     [SerializeField] private int chestMaterialIndex = 0;
     [SerializeField] private Material chestNormalMaterial;
     [SerializeField] private Material chestRednessMaterial;
@@ -59,7 +46,7 @@ public bool HandInspected => handInspected;
     [SerializeField] private Vector3 chestViewRotation = new Vector3(0f, 180f, 0f);
 
     [SerializeField] private float handDistanceFromCamera = 3f;
-    [SerializeField] private Vector3 handViewOffset = new Vector3(0f, 0f, 0f);
+    [SerializeField] private Vector3 handViewOffset = Vector3.zero;
     [SerializeField] private Vector3 handViewRotation = Vector3.zero;
 
     [Header("Optional World Prompt")]
@@ -79,10 +66,6 @@ public bool HandInspected => handInspected;
 
     [Header("Controls")]
     [SerializeField] private KeyCode exitKey = KeyCode.Escape;
-
-    [Header("Display Anchors")]
-    [SerializeField] private Transform chestAnchor;
-    [SerializeField] private Transform handAnchor;
 
     private bool isInspecting = false;
     private InspectionPartType currentPart;
@@ -111,6 +94,9 @@ public bool HandInspected => handInspected;
 
         HideAllInspectionVisualObjects();
         ResetInspectionMaterials();
+
+        if (chestBreathingController != null)
+            chestBreathingController.StopBreathing();
     }
 
     private void Update()
@@ -160,28 +146,16 @@ public bool HandInspected => handInspected;
         HideAllInspectionVisualObjects();
         ResetInspectionMaterials();
 
+        if (chestBreathingController != null)
+            chestBreathingController.StopBreathing();
+
         if (partType == InspectionPartType.Chest)
-        {
             OpenChestInspection();
-        }
         else
-        {
             OpenHandInspection();
-        }
 
         ApplyScenarioVisuals(partType);
-
-        string title = partType == InspectionPartType.Chest ? "Chest Inspection" : "Hand Inspection";
-        string clue = scenarioManager.GetInspectionClue(partType);
-
-        if (inspectionTitleText != null)
-            inspectionTitleText.text = title;
-
-        if (inspectionBodyText != null)
-            inspectionBodyText.text = clue;
-
-        if (inspectionExitHintText != null)
-            inspectionExitHintText.text = "Press Esc to exit";
+        UpdateInspectionText(partType);
 
         scenarioManager.EnterInspectionView(partType);
     }
@@ -206,10 +180,11 @@ public bool HandInspected => handInspected;
         if (inspectionObjectController == null)
             return;
 
-        if (chestMeshToRotate != null)
-            inspectionObjectController.SetTarget(chestMeshToRotate, InspectionPartType.Chest);
-        else
-            inspectionObjectController.SetTarget(chestInspectionObject.transform, InspectionPartType.Chest);
+        Transform target = chestMeshToRotate != null
+            ? chestMeshToRotate
+            : chestInspectionObject.transform;
+
+        inspectionObjectController.SetTarget(target, InspectionPartType.Chest);
     }
 
     private void OpenHandInspection()
@@ -232,10 +207,11 @@ public bool HandInspected => handInspected;
         if (inspectionObjectController == null)
             return;
 
-        if (handMeshToRotate != null)
-            inspectionObjectController.SetTarget(handMeshToRotate, InspectionPartType.Hand);
-        else
-            inspectionObjectController.SetTarget(handInspectionObject.transform, InspectionPartType.Hand);
+        Transform target = handMeshToRotate != null
+            ? handMeshToRotate
+            : handInspectionObject.transform;
+
+        inspectionObjectController.SetTarget(target, InspectionPartType.Hand);
     }
 
     private void ApplyScenarioVisuals(InspectionPartType partType)
@@ -244,13 +220,10 @@ public bool HandInspected => handInspected;
             return;
 
         if (partType == InspectionPartType.Hand)
-        {
             ApplyHandVisuals();
-        }
-        else if (partType == InspectionPartType.Chest)
-        {
+
+        if (partType == InspectionPartType.Chest)
             ApplyChestVisuals();
-        }
     }
 
     private void ApplyHandVisuals()
@@ -258,54 +231,73 @@ public bool HandInspected => handInspected;
         bool showRash = scenarioManager.ShouldShowHandRash();
         bool showPale = scenarioManager.ShouldShowPaleHand();
 
-        // Use this if rash spots/patches are separate GameObjects.
         if (handRashVisuals != null)
             handRashVisuals.SetActive(showRash);
 
-        // Use this if the hand rash/pallor is material-based.
-        if (handRenderer != null)
+        if (handRenderer == null)
+            return;
+
+        if (showRash && handRashMaterial != null)
         {
-            if (showRash && handRashMaterial != null)
-            {
-                SetRendererMaterial(handRenderer, handMaterialIndex, handRashMaterial);
-            }
-            else if (showPale && handPaleMaterial != null)
-            {
-                SetRendererMaterial(handRenderer, handMaterialIndex, handPaleMaterial);
-            }
-            else if (handNormalMaterial != null)
-            {
-                SetRendererMaterial(handRenderer, handMaterialIndex, handNormalMaterial);
-            }
+            SetRendererMaterial(handRenderer, handMaterialIndex, handRashMaterial);
+        }
+        else if (showPale && handPaleMaterial != null)
+        {
+            SetRendererMaterial(handRenderer, handMaterialIndex, handPaleMaterial);
+        }
+        else if (handNormalMaterial != null)
+        {
+            SetRendererMaterial(handRenderer, handMaterialIndex, handNormalMaterial);
         }
     }
 
     private void ApplyChestVisuals()
-{
-    bool showRedness = scenarioManager.ShouldShowChestRedness();
-    bool showRespiratoryDistress = scenarioManager.ShouldShowRespiratoryDistress();
-
-    if (chestRednessVisuals != null)
-        chestRednessVisuals.SetActive(showRedness);
-
-    if (respiratoryDistressVisuals != null)
-        respiratoryDistressVisuals.SetActive(showRespiratoryDistress);
-
-    if (chestRenderer != null)
     {
-        if (showRedness && chestRednessMaterial != null)
+        bool showRedness = scenarioManager.ShouldShowChestRedness();
+        bool showRespiratoryDistress = scenarioManager.ShouldShowRespiratoryDistress();
+
+        if (chestRednessVisuals != null)
+            chestRednessVisuals.SetActive(showRedness);
+
+        if (respiratoryDistressVisuals != null)
+            respiratoryDistressVisuals.SetActive(showRespiratoryDistress);
+
+        if (chestRenderer != null)
         {
-            SetRendererMaterial(chestRenderer, chestMaterialIndex, chestRednessMaterial);
+            if (showRedness && chestRednessMaterial != null)
+            {
+                SetRendererMaterial(chestRenderer, chestMaterialIndex, chestRednessMaterial);
+            }
+            else if (chestNormalMaterial != null)
+            {
+                SetRendererMaterial(chestRenderer, chestMaterialIndex, chestNormalMaterial);
+            }
         }
-        else if (chestNormalMaterial != null)
-        {
-            SetRendererMaterial(chestRenderer, chestMaterialIndex, chestNormalMaterial);
-        }
+
+        if (chestBreathingController != null)
+            chestBreathingController.StartBreathing(showRespiratoryDistress);
     }
 
-    if (chestBreathingController != null)
-        chestBreathingController.StartBreathing(showRespiratoryDistress);
-}
+    private void UpdateInspectionText(InspectionPartType partType)
+    {
+        string title = partType == InspectionPartType.Chest
+            ? "Chest Inspection"
+            : "Hand Inspection";
+
+        string clue = scenarioManager != null
+            ? scenarioManager.GetInspectionClue(partType)
+            : "";
+
+        if (inspectionTitleText != null)
+            inspectionTitleText.text = title;
+
+        if (inspectionBodyText != null)
+            inspectionBodyText.text = clue;
+
+        if (inspectionExitHintText != null)
+            inspectionExitHintText.text = "Press Esc to exit";
+    }
+
     private void HideAllInspectionVisualObjects()
     {
         if (handRashVisuals != null)
@@ -337,7 +329,7 @@ public bool HandInspected => handInspected;
         if (materialIndex < 0 || materialIndex >= materials.Length)
         {
             Debug.LogWarning(
-                $"{renderer.name}: Material index {materialIndex} is invalid. Renderer has {materials.Length} material slot(s)."
+                $"{renderer.name}: Material index {materialIndex} invalid. Renderer has {materials.Length} slot(s)."
             );
             return;
         }
@@ -376,8 +368,9 @@ public bool HandInspected => handInspected;
 
         HideAllInspectionVisualObjects();
         ResetInspectionMaterials();
+
         if (chestBreathingController != null)
-    chestBreathingController.StopBreathing();
+            chestBreathingController.StopBreathing();
 
         if (interactionPromptUI != null)
             interactionPromptUI.SetActive(true);
@@ -388,7 +381,8 @@ public bool HandInspected => handInspected;
         if (inspectionObjectController != null)
             inspectionObjectController.ClearTarget();
 
-        scenarioManager.ExitInspectionView(currentPart);
+        if (scenarioManager != null)
+            scenarioManager.ExitInspectionView(currentPart);
     }
 
     private void PlaceObjectInFrontOfCamera(GameObject obj, float distance, Vector3 offset, Vector3 eulerRotation)
@@ -406,5 +400,4 @@ public bool HandInspected => handInspected;
 
         obj.transform.rotation = cam.rotation * Quaternion.Euler(eulerRotation);
     }
-    
 }
