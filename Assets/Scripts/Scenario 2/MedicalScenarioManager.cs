@@ -29,13 +29,15 @@ public class MedicalScenarioManager : MonoBehaviour
 
     [Header("Question Settings")]
     [SerializeField] private int maxQuestions = 3;
+
     [Header("Patient")]
-[SerializeField] private PatientConversationController conversationController;
-[SerializeField] private AnaphylaxisPatientController patientAnimationController;
+    [SerializeField] private PatientConversationController conversationController;
+    [SerializeField] private AnaphylaxisPatientController patientAnimationController;
 
     [Header("Typing Settings")]
     [SerializeField] private float typingSpeed = 0.025f;
     [SerializeField] private float linePause = 0.35f;
+    [SerializeField] private KeyCode skipDialogueKey = KeyCode.Escape;
 
     [Header("Dialogue Audio")]
     [SerializeField] private AudioSource dialogueAudioSource;
@@ -50,8 +52,9 @@ public class MedicalScenarioManager : MonoBehaviour
     [SerializeField] private AudioClip openingPatientVoiceClip;
 
     [Header("Result Text Styling")]
-[SerializeField] private float resultTitleFontSize = 34f;
-[SerializeField] private float resultBodyFontSize = 25f;
+    [SerializeField] private float resultTitleFontSize = 34f;
+    [SerializeField] private float resultBodyFontSize = 25f;
+    [SerializeField] private float resultBodyMinFontSize = 16f;
 
     [Header("Intro UI")]
     [SerializeField] private GameObject introFadePanel;
@@ -87,16 +90,23 @@ public class MedicalScenarioManager : MonoBehaviour
     private bool inspectedHand = false;
     private ScenarioState stateBeforeInspection;
 
-    
-
     private int questionsAsked = 0;
     private readonly List<MedicalQuestionType> askedQuestions = new();
 
     private Coroutine typingCoroutine;
+    private Coroutine introCoroutine;
+    private Coroutine outcomeCoroutine;
     private bool isTyping = false;
     private bool waitingForQuestionExit = false;
     private bool introFinished = false;
     private bool openingDialoguePlayed = false;
+    private bool openingDialogueInProgress = false;
+    private string activeQuestionLine = "";
+    private string activeAnswerLine = "";
+    private bool activeQuestionFinishesAfterTyping = false;
+    private bool outcomeResultPending = false;
+    private bool pendingOutcomeSuccess = false;
+    private string pendingOutcomeFailReason = "";
 
     public ScenarioState CurrentState => currentState;
     public bool CanOpenMedkit => currentState == ScenarioState.MedicationSelection;
@@ -112,11 +122,14 @@ public class MedicalScenarioManager : MonoBehaviour
     private void Start()
     {
         StartScenario();
-        StartCoroutine(IntroSequence());
+        introCoroutine = StartCoroutine(IntroSequence());
     }
 
     private void Update()
     {
+        if (Input.GetKeyDown(skipDialogueKey))
+            SkipActiveDialogue();
+
         if (waitingForQuestionExit && inputManager != null && inputManager.OnFoot.Interact.triggered)
         {
             waitingForQuestionExit = false;
@@ -148,6 +161,18 @@ public class MedicalScenarioManager : MonoBehaviour
             typingCoroutine = null;
         }
 
+        if (introCoroutine != null)
+        {
+            StopCoroutine(introCoroutine);
+            introCoroutine = null;
+        }
+
+        if (outcomeCoroutine != null)
+        {
+            StopCoroutine(outcomeCoroutine);
+            outcomeCoroutine = null;
+        }
+
         if (dialogueAudioSource != null)
             dialogueAudioSource.Stop();
 
@@ -158,6 +183,13 @@ public class MedicalScenarioManager : MonoBehaviour
         waitingForQuestionExit = false;
         introFinished = false;
         openingDialoguePlayed = false;
+        openingDialogueInProgress = false;
+        activeQuestionLine = "";
+        activeAnswerLine = "";
+        activeQuestionFinishesAfterTyping = false;
+        outcomeResultPending = false;
+        pendingOutcomeSuccess = false;
+        pendingOutcomeFailReason = "";
 
         if (objectiveText != null)
             objectiveText.text = "";
@@ -292,11 +324,11 @@ public class MedicalScenarioManager : MonoBehaviour
             introText.text = "";
 
         yield return new WaitForSeconds(0.5f);
-        yield return StartCoroutine(FadeIntroPanel(1f, 0.3f));
+        yield return FadeIntroPanel(1f, 0.3f);
 
         PlayNarratorClip(currentScenario.introSceneClip);
-        yield return StartCoroutine(TypeIntroSequenceLine(
-            "You arrive at a restaurant and notice a distressed individual.", 0.4f));
+        yield return TypeIntroSequenceLine(
+            "You arrive at a restaurant and notice a distressed individual.", 0.4f);
 
         if (narratorAudioSource != null && narratorAudioSource.isPlaying)
             yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
@@ -306,8 +338,8 @@ public class MedicalScenarioManager : MonoBehaviour
         yield return new WaitForSeconds(0.35f);
 
         PlayNarratorClip(currentScenario.assessmentObjectiveClip);
-        yield return StartCoroutine(TypeIntroSequenceLine(
-            "Approach the patient and begin assessment.", 0.4f));
+        yield return TypeIntroSequenceLine(
+            "Approach the patient and begin assessment.", 0.4f);
 
         if (narratorAudioSource != null && narratorAudioSource.isPlaying)
             yield return new WaitUntil(() => !narratorAudioSource.isPlaying);
@@ -329,6 +361,8 @@ public class MedicalScenarioManager : MonoBehaviour
 
         if (playerLook != null)
             playerLook.EndForcedLook();
+
+        introCoroutine = null;
     }
 
     private IEnumerator FadeIntroPanel(float fromAlpha, float toAlpha)
@@ -376,7 +410,7 @@ public class MedicalScenarioManager : MonoBehaviour
 
     private IEnumerator TypeIntroSequenceLine(string line, float holdTime)
     {
-        yield return StartCoroutine(TypeIntroLine(line));
+        yield return TypeIntroLine(line);
         yield return new WaitForSeconds(holdTime);
     }
 
@@ -421,10 +455,12 @@ public class MedicalScenarioManager : MonoBehaviour
     private IEnumerator PlayOpeningDialogue()
     {
         isTyping = true;
+        openingDialogueInProgress = true;
 
         if (answerText == null)
         {
             isTyping = false;
+            openingDialogueInProgress = false;
             yield break;
         }
 
@@ -443,7 +479,7 @@ public class MedicalScenarioManager : MonoBehaviour
             dialogueAudioSource.Play();
         }
 
-        yield return StartCoroutine(TypeLine(youLine));
+        yield return TypeLine(youLine);
 
         if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
             yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
@@ -464,7 +500,7 @@ public class MedicalScenarioManager : MonoBehaviour
             dialogueAudioSource.Play();
         }
 
-        yield return StartCoroutine(TypeLine(patientLine));
+        yield return TypeLine(patientLine);
 
         if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
             yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
@@ -494,6 +530,8 @@ public class MedicalScenarioManager : MonoBehaviour
 
         if (questionPanel != null)
             questionPanel.SetActive(true);
+
+        openingDialogueInProgress = false;
 
         Debug.Log("Opening dialogue finished. Question UI enabled.");
     }
@@ -535,6 +573,9 @@ public class MedicalScenarioManager : MonoBehaviour
 
         if (answerPanel != null && !answerPanel.activeSelf)
             answerPanel.SetActive(true);
+
+        if (questionPanel != null)
+            questionPanel.SetActive(false);
 
         if (typingCoroutine != null)
             StopCoroutine(typingCoroutine);
@@ -652,6 +693,9 @@ public class MedicalScenarioManager : MonoBehaviour
 
         string youLine = $"You: {question}";
         string patientLine = $"Patient: {pair.answer}";
+        activeQuestionLine = youLine;
+        activeAnswerLine = patientLine;
+        activeQuestionFinishesAfterTyping = finishAfterTyping;
 
         if (conversationController != null)
             conversationController.StopPatientTalking();
@@ -663,7 +707,7 @@ public class MedicalScenarioManager : MonoBehaviour
             dialogueAudioSource.Play();
         }
 
-        yield return StartCoroutine(TypeLine(youLine));
+        yield return TypeLine(youLine);
 
         if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
             yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
@@ -684,7 +728,7 @@ public class MedicalScenarioManager : MonoBehaviour
             dialogueAudioSource.Play();
         }
 
-        yield return StartCoroutine(TypeLine(patientLine));
+        yield return TypeLine(patientLine);
 
         if (dialogueAudioSource != null && dialogueAudioSource.isPlaying)
             yield return new WaitUntil(() => !dialogueAudioSource.isPlaying);
@@ -694,6 +738,9 @@ public class MedicalScenarioManager : MonoBehaviour
 
         isTyping = false;
         typingCoroutine = null;
+        activeQuestionLine = "";
+        activeAnswerLine = "";
+        activeQuestionFinishesAfterTyping = false;
 
         if (finishAfterTyping)
         {
@@ -701,6 +748,10 @@ public class MedicalScenarioManager : MonoBehaviour
 
             if (objectiveText != null)
                 objectiveText.text = "Assessment complete. Press E to continue.";
+        }
+        else if (questionPanel != null)
+        {
+            questionPanel.SetActive(true);
         }
     }
 
@@ -751,53 +802,65 @@ public class MedicalScenarioManager : MonoBehaviour
         }
     }
 
-   private void WinScenario()
-{
-    currentState = ScenarioState.Success;
-
-    if (conversationController != null)
-        conversationController.EndConversation();
-
-    if (patientAnimationController != null)
-        patientAnimationController.TriggerRecover();
-
-    if (objectiveText != null)
-        objectiveText.text = "Patient is stabilizing...";
-
-
-    if (narratorAudioSource != null && currentScenario.successVoiceClip != null)
+    private void WinScenario()
     {
-        narratorAudioSource.Stop();
-        narratorAudioSource.clip = currentScenario.successVoiceClip;
-        narratorAudioSource.Play();
+        currentState = ScenarioState.Success;
+
+        if (conversationController != null)
+            conversationController.EndConversation();
+
+        if (patientAnimationController != null)
+            patientAnimationController.TriggerRecover();
+        else
+            Debug.LogWarning("MedicalScenarioManager: Assign patientAnimationController in the Inspector to trigger recovery animation.");
+
+        if (objectiveText != null)
+            objectiveText.text = "Patient is stabilizing...";
+
+        AudioClip outcomeClip = GetOutcomeClip(true);
+
+        if (narratorAudioSource != null && outcomeClip != null)
+        {
+            narratorAudioSource.Stop();
+            narratorAudioSource.clip = outcomeClip;
+            narratorAudioSource.Play();
+        }
+
+        pendingOutcomeSuccess = true;
+        pendingOutcomeFailReason = "";
+        outcomeResultPending = true;
+        outcomeCoroutine = StartCoroutine(PlayOutcomeAndShowResult(true));
     }
 
-    StartCoroutine(PlayOutcomeAndShowResult(true));
-}
-
-private void FailScenario(string reason)
-{
-    currentState = ScenarioState.Failure;
-
-    if (conversationController != null)
-        conversationController.EndConversation();
-
-    if (patientAnimationController != null)
-        patientAnimationController.TriggerCollapse();
-
-    if (objectiveText != null)
-        objectiveText.text = "Patient condition worsening...";
-
-
-    if (narratorAudioSource != null && currentScenario.failureVoiceClip != null)
+    private void FailScenario(string reason)
     {
-        narratorAudioSource.Stop();
-        narratorAudioSource.clip = currentScenario.failureVoiceClip;
-        narratorAudioSource.Play();
-    }
+        currentState = ScenarioState.Failure;
 
-    StartCoroutine(PlayOutcomeAndShowResult(false, reason));
-}
+        if (conversationController != null)
+            conversationController.EndConversation();
+
+        if (patientAnimationController != null)
+            patientAnimationController.TriggerCollapse();
+        else
+            Debug.LogWarning("MedicalScenarioManager: Assign patientAnimationController in the Inspector to trigger collapse animation.");
+
+        if (objectiveText != null)
+            objectiveText.text = "Patient condition worsening...";
+
+        AudioClip outcomeClip = GetOutcomeClip(false);
+
+        if (narratorAudioSource != null && outcomeClip != null)
+        {
+            narratorAudioSource.Stop();
+            narratorAudioSource.clip = outcomeClip;
+            narratorAudioSource.Play();
+        }
+
+        pendingOutcomeSuccess = false;
+        pendingOutcomeFailReason = reason;
+        outcomeResultPending = true;
+        outcomeCoroutine = StartCoroutine(PlayOutcomeAndShowResult(false, reason));
+    }
 
     private void ShowResult(string title, string body, Color titleColor)
 {
@@ -834,9 +897,12 @@ private void FailScenario(string reason)
         resultBodyText.text = body;
         resultBodyText.color = resultBodyColor;
         resultBodyText.fontSize = resultBodyFontSize;
+        resultBodyText.enableAutoSizing = true;
+        resultBodyText.fontSizeMax = resultBodyFontSize;
+        resultBodyText.fontSizeMin = Mathf.Clamp(resultBodyMinFontSize, 10f, resultBodyFontSize);
         resultBodyText.alignment = TextAlignmentOptions.TopLeft;
         resultBodyText.enableWordWrapping = true;
-        resultBodyText.overflowMode = TextOverflowModes.Overflow;
+        resultBodyText.overflowMode = TextOverflowModes.Ellipsis;
     }
 
     if (objectiveText != null)
@@ -855,6 +921,171 @@ private void FailScenario(string reason)
         narratorAudioSource.Play();
     }
 
+    private void SkipActiveDialogue()
+    {
+        if (currentState == ScenarioState.InspectionView || currentState == ScenarioState.InMedkitView)
+            return;
+
+        if (currentState == ScenarioState.Intro)
+        {
+            SkipIntroDialogue();
+            return;
+        }
+
+        if (outcomeResultPending)
+        {
+            SkipOutcomeDialogue();
+            return;
+        }
+
+        if (currentState != ScenarioState.Questioning)
+            return;
+
+        if (!isTyping && !IsDialogueAudioBusy() && !IsNarratorBusy())
+            return;
+
+        if (openingDialogueInProgress)
+            SkipOpeningDialogue();
+        else
+            SkipQuestionDialogue();
+    }
+
+    private void SkipIntroDialogue()
+    {
+        if (introCoroutine != null)
+        {
+            StopCoroutine(introCoroutine);
+            introCoroutine = null;
+        }
+
+        StopAllScenarioAudio();
+
+        currentState = ScenarioState.WaitingForPatientInteraction;
+        introFinished = true;
+
+        if (introText != null)
+            introText.text = "";
+
+        if (introFadePanel != null)
+            introFadePanel.SetActive(false);
+
+        if (objectiveText != null)
+            objectiveText.text = "Approach the patient and begin assessment.";
+
+        SetGameplayLocked(false);
+        SetCursorState(false);
+
+        if (playerLook != null)
+            playerLook.EndForcedLook();
+    }
+
+    private void SkipOpeningDialogue()
+    {
+        StopTypingCoroutine();
+        StopAllScenarioAudio();
+
+        if (answerText != null)
+            answerText.text = $"You: {openingPlayerLine}\n\nPatient: {openingPatientLine}";
+
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
+
+        isTyping = false;
+        openingDialogueInProgress = false;
+        openingDialoguePlayed = true;
+
+        if (objectiveText != null)
+            objectiveText.text = $"Ask up to {maxQuestions} questions.";
+
+        if (answerPanel != null)
+            answerPanel.SetActive(true);
+
+        if (questionPanel != null)
+            questionPanel.SetActive(true);
+    }
+
+    private void SkipQuestionDialogue()
+    {
+        StopTypingCoroutine();
+        StopAllScenarioAudio();
+
+        if (answerText != null && !string.IsNullOrWhiteSpace(activeAnswerLine))
+            answerText.text = $"{activeQuestionLine}\n\n{activeAnswerLine}";
+
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
+
+        isTyping = false;
+
+        if (activeQuestionFinishesAfterTyping)
+        {
+            waitingForQuestionExit = true;
+
+            if (objectiveText != null)
+                objectiveText.text = "Assessment complete. Press E to continue.";
+        }
+        else if (questionPanel != null)
+        {
+            questionPanel.SetActive(true);
+        }
+
+        activeQuestionLine = "";
+        activeAnswerLine = "";
+        activeQuestionFinishesAfterTyping = false;
+    }
+
+    private void SkipOutcomeDialogue()
+    {
+        if (outcomeCoroutine != null)
+        {
+            StopCoroutine(outcomeCoroutine);
+            outcomeCoroutine = null;
+        }
+
+        StopAllScenarioAudio();
+
+        if (conversationController != null)
+            conversationController.StopPatientTalking();
+
+        bool success = pendingOutcomeSuccess;
+        string failReason = pendingOutcomeFailReason;
+
+        outcomeResultPending = false;
+        pendingOutcomeSuccess = false;
+        pendingOutcomeFailReason = "";
+
+        string debrief = GenerateDebrief(
+            success,
+            success ? "Correct medication given." : failReason
+        );
+
+        ShowResult(success ? "SUCCESS" : "FAILURE", debrief,
+            success ? successTitleColor : failureTitleColor);
+    }
+
+    private void StopTypingCoroutine()
+    {
+        if (typingCoroutine == null)
+            return;
+
+        StopCoroutine(typingCoroutine);
+        typingCoroutine = null;
+    }
+
+    private void StopAllScenarioAudio()
+    {
+        if (dialogueAudioSource != null)
+            dialogueAudioSource.Stop();
+
+        if (narratorAudioSource != null)
+            narratorAudioSource.Stop();
+    }
+
+    private bool IsDialogueAudioBusy()
+    {
+        return dialogueAudioSource != null && dialogueAudioSource.isPlaying;
+    }
+
     private void SetGameplayLocked(bool locked)
     {
         if (inputManager != null)
@@ -871,6 +1102,15 @@ private void FailScenario(string reason)
     System.Text.StringBuilder sb = new System.Text.StringBuilder();
 
     sb.AppendLine(reason);
+
+    string outcomeDialogue = GetOutcomeDialogue(success);
+
+    if (!string.IsNullOrWhiteSpace(outcomeDialogue))
+    {
+        sb.AppendLine();
+        sb.AppendLine(outcomeDialogue);
+    }
+
     sb.AppendLine();
     sb.AppendLine(GenerateScoreLine(success));
     sb.AppendLine();
@@ -1041,6 +1281,36 @@ private string ShortenInspectionClue(string clue)
     return clue.Substring(0, 82) + "...";
 }
 
+private AudioClip GetOutcomeClip(bool success)
+{
+    if (currentScenario == null)
+        return null;
+
+    AudioClip assignedClip = success
+        ? currentScenario.successVoiceClip
+        : currentScenario.failureVoiceClip;
+
+    if (assignedClip != null)
+        return assignedClip;
+
+    return success ? currentScenario.successClip : currentScenario.failureClip;
+}
+
+private string GetOutcomeDialogue(bool success)
+{
+    if (currentScenario == null)
+        return "";
+
+    string assignedDialogue = success
+        ? currentScenario.successDialogue
+        : currentScenario.failureDialogue;
+
+    if (!string.IsNullOrWhiteSpace(assignedDialogue))
+        return assignedDialogue.Trim();
+
+    return "";
+}
+
 public bool ShouldShowHandRash()
 {
     return currentScenario != null && currentScenario.showHandRash;
@@ -1080,5 +1350,10 @@ private IEnumerator PlayOutcomeAndShowResult(bool success, string failReason = "
 
     ShowResult(success ? "SUCCESS" : "FAILURE", debrief,
         success ? successTitleColor : failureTitleColor);
+
+    outcomeCoroutine = null;
+    outcomeResultPending = false;
+    pendingOutcomeSuccess = false;
+    pendingOutcomeFailReason = "";
 }
 }

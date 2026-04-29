@@ -14,7 +14,6 @@ public class QuestionAnswerPair
     public AudioClip patientVoiceClip;
 }
 
-
 [Serializable]
 public class SubScenarioData
 {
@@ -39,18 +38,18 @@ public class SubScenarioData
     public AudioClip medkitObjectiveClip;
     public AudioClip successClip;
     public AudioClip failureClip;
+
     [Header("Inspection Visual Findings")]
-public bool showHandRash;
-public bool showChestRedness;
-public bool showPaleHand;
-public bool showRespiratoryDistress;
+    public bool showHandRash;
+    public bool showChestRedness;
+    public bool showPaleHand;
+    public bool showRespiratoryDistress;
 
-[Header("Outcome Dialogue")]
-[TextArea(2,4)] public string successDialogue;
-[TextArea(2,4)] public string failureDialogue;
+    [Header("Outcome Dialogue")]
+    [TextArea(2, 4)] public string successDialogue;
+    [TextArea(2, 4)] public string failureDialogue;
 
-[Header("Outcome Audio")]
-public AudioClip successVoiceClip;
-public AudioClip failureVoiceClip;
-
+    [Header("Outcome Audio")]
+    public AudioClip successVoiceClip;
+    public AudioClip failureVoiceClip;
 }

@@ -18167,8 +18167,6 @@ MonoBehaviour:
   objectiveBannerUI: {fileID: 1892993773}
   inspectionObjectController: {fileID: 1305751400}
   exitKey: 27
-  chestAnchor: {fileID: 723669582}
-  handAnchor: {fileID: 1796508128}
 --- !u!4 &740720438
 Transform:
   m_ObjectHideFlags: 0
@@ -23136,6 +23134,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 3281755754987455352, guid: 2a706093cdcc8d24f8b31d830f678399, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1233608059}
+    - targetCorrespondingSourceObject: {fileID: 3281755754987455352, guid: 2a706093cdcc8d24f8b31d830f678399, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1233608061}
   m_SourcePrefab: {fileID: 100100000, guid: 2a706093cdcc8d24f8b31d830f678399, type: 3}
 --- !u!1001 &886993303
 PrefabInstance:
@@ -32864,6 +32865,19 @@ Animator:
   m_AllowConstantClipSamplingOptimization: 1
   m_KeepAnimatorStateOnDisable: 0
   m_WriteDefaultValuesOnDisable: 0
+--- !u!114 &1233608061
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1233608046}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 115cc1f6b719b4b59b13e50cf35b1006, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::AnaphylaxisPatientController
+  animator: {fileID: 1233608060}
 --- !u!1 &1234313587
 GameObject:
   m_ObjectHideFlags: 0
@@ -53575,6 +53589,12 @@ MonoBehaviour:
     showChestRedness: 1
     showPaleHand: 0
     showRespiratoryDistress: 1
+    successDialogue: Epinephrine is the correct emergency treatment. The patient's
+      breathing begins to ease as the allergic reaction is treated.
+    failureDialogue: The patient's breathing and throat tightness worsen. This presentation
+      was most consistent with anaphylaxis, so epinephrine was required.
+    successVoiceClip: {fileID: 8300000, guid: b41cdb5ae2842456390d4ba40cf2cdc3, type: 3}
+    failureVoiceClip: {fileID: 8300000, guid: dc83945c624b14f5db565cb42cf8150c, type: 3}
   - scenarioName: Asthma Attack
     correctMedication: Inhaler
     answers:
@@ -53617,6 +53637,13 @@ MonoBehaviour:
     showChestRedness: 0
     showPaleHand: 0
     showRespiratoryDistress: 1
+    successDialogue: The inhaler is helping. The patient's breathing starts to ease,
+      and the wheezing becomes less severe.
+    failureDialogue: The patient's breathing remains tight and labored. This presentation
+      was most consistent with an asthma attack, so a bronchodilator inhaler was
+      needed.
+    successVoiceClip: {fileID: 8300000, guid: c6bb47a8904cf436d903947c5d3b20ec, type: 3}
+    failureVoiceClip: {fileID: 8300000, guid: eedc4c47422a64877856bb8f066161dc, type: 3}
   - scenarioName: Nausea and Vomiting
     correctMedication: Antiemetic
     answers:
@@ -53659,7 +53686,15 @@ MonoBehaviour:
     showChestRedness: 0
     showPaleHand: 1
     showRespiratoryDistress: 0
+    successDialogue: The antiemetic is appropriate for this presentation. The patient's
+      nausea starts to settle, and they appear less weak.
+    failureDialogue: The patient's nausea and weakness continue. This presentation
+      was most consistent with vomiting-related illness, so an antiemetic was needed.
+    successVoiceClip: {fileID: 8300000, guid: 2f20118c4075b4fd8b322625eeab657d, type: 3}
+    failureVoiceClip: {fileID: 8300000, guid: ce54f228aa4354bfa8286fef58ba22cc, type: 3}
   maxQuestions: 3
+  conversationController: {fileID: 1233608059}
+  patientAnimationController: {fileID: 1233608061}
   typingSpeed: 0.05
   linePause: 1
   dialogueAudioSource: {fileID: 2041899796}
@@ -53671,6 +53706,7 @@ MonoBehaviour:
   openingPatientVoiceClip: {fileID: 8300000, guid: c265cb192ec0044db9757c8857282b7f, type: 3}
   resultTitleFontSize: 36
   resultBodyFontSize: 23
+  resultBodyMinFontSize: 16
   introFadePanel: {fileID: 1937880435}
   introText: {fileID: 796677960}
   introLookTarget: {fileID: 183583515}
@@ -53687,7 +53723,6 @@ MonoBehaviour:
   medkitInstructionUI: {fileID: 1719798925}
   playerLook: {fileID: 217396638}
   inputManager: {fileID: 217396636}
-  conversationController: {fileID: 1233608059}
 --- !u!82 &2041899796
 AudioSource:
   m_ObjectHideFlags: 0
