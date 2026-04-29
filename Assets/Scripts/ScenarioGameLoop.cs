@@ -17,8 +17,8 @@ public class ScenarioGameLoop : MonoBehaviour
     public bool CprDone => cprDone;
 
     [Header("Failure & Patient State")]
-    [SerializeField] private GameObject failPanel;
-    [SerializeField] private TMP_Text timerText;          // gameplay HUD: bleed timer
+    [SerializeField] private GameObject[] failPanels;
+    [SerializeField] private TMP_Text[] timerTexts;          // gameplay HUD: bleed timer
     [SerializeField] private CPRMinigame cprMinigame;      // to detect CPR start
 
     [Header("Bleed-out")]
@@ -52,7 +52,7 @@ public class ScenarioGameLoop : MonoBehaviour
     private bool bleedingStopped;
     private bool cprStarted;
     private bool safetyPenaltyApplied;
-    [SerializeField] private TMP_Text failReasonText;
+    [SerializeField] private TMP_Text[] failReasonTexts;
 
 
     private void Awake()
@@ -192,7 +192,7 @@ private void HandleCPRClosed(bool completed)
 
     private void UpdateTimerUI()
 {
-    if (!timerText) return;
+    if (timerTexts == null || timerTexts.Length == 0) return;
 
     ApplyTimerTextStyle();
 
@@ -223,11 +223,17 @@ private void HandleCPRClosed(bool completed)
     if (!cprStarted && timeSinceStart >= cprMustStartBySeconds)
         cprState = "CPR deadline: 0s";
 
-    timerText.text =
-        $"Bleed timer: {m:00}:{s:00}\n" +
-        $"{bleedState}\n" +
-        $"{safetyState}\n" +
-        $"{cprState}";
+    string finalText =
+    $"Bleed timer: {m:00}:{s:00}\n" +
+    $"{bleedState}\n" +
+    $"{safetyState}\n" +
+    $"{cprState}";
+
+    foreach (var textElement in timerTexts)
+{
+    if (textElement != null)
+        textElement.text = finalText;
+}
 }
 
 private void ApplyTimerTextStyle()
@@ -273,14 +279,21 @@ private void ApplyTimerTextStyle()
     finished = true;
     Debug.Log($"SCENARIO FAILED: {reason}");
 
-    if (failReasonText)
-        failReasonText.text = $"Failure reason: {reason}";
+    foreach (var txt in failReasonTexts)
+{
+    if (txt != null)
+        txt.text = $"Failure reason: {reason}";
+}
 
-    if (failPanel)
+// Activate all fail panels (VR + Desktop)
+foreach (var panel in failPanels)
+{
+    if (panel != null)
     {
-        failPanel.SetActive(true);
-        ScenarioEndMenuActions.AddReturnToMainMenuButton(failPanel);
+        panel.SetActive(true);
+        ScenarioEndMenuActions.AddReturnToMainMenuButton(panel);
     }
+}
 
     if (disableOnWin != null)
         foreach (var m in disableOnWin)

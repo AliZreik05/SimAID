@@ -3,6 +3,7 @@ using UnityEngine;
 public class VRConePlacement : MonoBehaviour
 {
     private bool placed = false;
+    [SerializeField] private ConePlacer conePlacer;
 
     private void OnTriggerEnter(Collider other)
     {
@@ -12,16 +13,19 @@ public class VRConePlacement : MonoBehaviour
         {
             placed = true;
 
-            // ✅ Step 1: Snap to ground
+            // Step 1: Snap to ground
             SnapToGround();
 
-            // ✅ Step 2: Align upright
+            // Step 2: Align upright
             AlignUpright();
 
-            // ✅ Step 3: Notify GameLoop
-            FindFirstObjectByType<ConePlacer>()?.AddCone(1);
+            // Step 3: Notify GameLoop
+            if (conePlacer != null)
+{
+    conePlacer.RegisterConePlaced();
+}
 
-            // ✅ Step 4: Freeze
+            // Step 4: Freeze
             LockCone();
         }
     }
