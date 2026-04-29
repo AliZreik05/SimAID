@@ -44,6 +44,8 @@ public class CPRMinigame : MonoBehaviour
     private int totalPresses;
     private Action onComplete;
 
+    public bool IsRunning => running;
+
     private void Awake()
     {
         if (!rootPanel) rootPanel = gameObject;
@@ -93,6 +95,7 @@ public class CPRMinigame : MonoBehaviour
         {
             if (Input.GetKeyDown(cancelKey))
             {
+                EscapeInputGuard.MarkHandled();
                 StopCPR("CPR cancelled");
                 return;
             }
@@ -124,6 +127,7 @@ public class CPRMinigame : MonoBehaviour
 
         if (Input.GetKeyDown(cancelKey))
         {
+            EscapeInputGuard.MarkHandled();
             StopCPR("CPR cancelled");
             return;
         }

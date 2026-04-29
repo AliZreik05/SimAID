@@ -115,6 +115,12 @@ public class MedicalScenarioManager : MonoBehaviour
     currentState == ScenarioState.MedicationSelection &&
     Time.time >= inspectionUnlockTime;
 
+    public bool HasSkippableDialogue =>
+        currentState == ScenarioState.Intro ||
+        outcomeResultPending ||
+        (currentState == ScenarioState.Questioning &&
+         (openingDialogueInProgress || isTyping || IsDialogueAudioBusy() || IsNarratorBusy()));
+
     public bool InspectedChest => inspectedChest;
     public bool InspectedHand => inspectedHand;
     private float inspectionUnlockTime = 0f;
@@ -127,8 +133,11 @@ public class MedicalScenarioManager : MonoBehaviour
 
     private void Update()
     {
-        if (Input.GetKeyDown(skipDialogueKey))
+        if (Input.GetKeyDown(skipDialogueKey) && HasSkippableDialogue)
+        {
+            EscapeInputGuard.MarkHandled();
             SkipActiveDialogue();
+        }
 
         if (waitingForQuestionExit && inputManager != null && inputManager.OnFoot.Interact.triggered)
         {
@@ -399,10 +408,12 @@ public class MedicalScenarioManager : MonoBehaviour
         if (introText == null)
             yield break;
 
+        ApplyOverlayTextStyle(introText, 18f, 28f);
         introText.text = "";
 
         for (int i = 0; i < line.Length; i++)
         {
+            ApplyOverlayTextStyle(introText, 18f, 28f);
             introText.text += line[i];
             yield return new WaitForSeconds(typingSpeed);
         }
@@ -412,6 +423,23 @@ public class MedicalScenarioManager : MonoBehaviour
     {
         yield return TypeIntroLine(line);
         yield return new WaitForSeconds(holdTime);
+    }
+
+    private void ApplyOverlayTextStyle(TMP_Text text, float minSize, float maxSize)
+    {
+        if (text == null)
+            return;
+
+        text.enableWordWrapping = true;
+        text.overflowMode = TextOverflowModes.Overflow;
+        text.enableAutoSizing = true;
+        text.fontSizeMin = minSize;
+        text.fontSizeMax = maxSize;
+
+        RectTransform rect = text.rectTransform;
+
+        if (rect != null)
+            rect.sizeDelta = new Vector2(Mathf.Max(rect.sizeDelta.x, 920f), Mathf.Max(rect.sizeDelta.y, 72f));
     }
 
     public void BeginPatientAssessment()
@@ -878,7 +906,11 @@ public class MedicalScenarioManager : MonoBehaviour
 
     if (questionPanel != null) questionPanel.SetActive(false);
     if (answerPanel != null) answerPanel.SetActive(false);
-    if (resultPanel != null) resultPanel.SetActive(true);
+    if (resultPanel != null)
+    {
+        resultPanel.SetActive(true);
+        ScenarioEndMenuActions.AddReturnToMainMenuButton(resultPanel);
+    }
     if (medkitInstructionUI != null) medkitInstructionUI.SetActive(false);
 
     if (conversationController != null)
@@ -902,7 +934,7 @@ public class MedicalScenarioManager : MonoBehaviour
         resultBodyText.fontSizeMin = Mathf.Clamp(resultBodyMinFontSize, 10f, resultBodyFontSize);
         resultBodyText.alignment = TextAlignmentOptions.TopLeft;
         resultBodyText.enableWordWrapping = true;
-        resultBodyText.overflowMode = TextOverflowModes.Ellipsis;
+        resultBodyText.overflowMode = TextOverflowModes.Overflow;
     }
 
     if (objectiveText != null)

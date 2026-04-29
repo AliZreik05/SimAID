@@ -194,6 +194,8 @@ private void HandleCPRClosed(bool completed)
 {
     if (!timerText) return;
 
+    ApplyTimerTextStyle();
+
     int t = Mathf.CeilToInt(bleedLeft);
     int m = t / 60;
     int s = t % 60;
@@ -228,6 +230,15 @@ private void HandleCPRClosed(bool completed)
         $"{cprState}";
 }
 
+private void ApplyTimerTextStyle()
+{
+    timerText.enableWordWrapping = true;
+    timerText.overflowMode = TextOverflowModes.Overflow;
+    timerText.enableAutoSizing = true;
+    timerText.fontSizeMin = 14f;
+    timerText.fontSizeMax = Mathf.Max(timerText.fontSize, 24f);
+}
+
 
     private void CheckWin()
     {
@@ -242,7 +253,11 @@ private void HandleCPRClosed(bool completed)
             finished = true;
             Debug.Log("✅ SCENARIO COMPLETE");
 
-            if (winPanel) winPanel.SetActive(true);
+            if (winPanel)
+            {
+                winPanel.SetActive(true);
+                ScenarioEndMenuActions.AddReturnToMainMenuButton(winPanel);
+            }
 
             if (disableOnWin != null)
                 foreach (var m in disableOnWin)
@@ -261,7 +276,11 @@ private void HandleCPRClosed(bool completed)
     if (failReasonText)
         failReasonText.text = $"Failure reason: {reason}";
 
-    if (failPanel) failPanel.SetActive(true);
+    if (failPanel)
+    {
+        failPanel.SetActive(true);
+        ScenarioEndMenuActions.AddReturnToMainMenuButton(failPanel);
+    }
 
     if (disableOnWin != null)
         foreach (var m in disableOnWin)

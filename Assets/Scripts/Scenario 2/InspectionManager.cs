@@ -105,7 +105,10 @@ public class InspectionManager : MonoBehaviour
             return;
 
         if (Input.GetKeyDown(exitKey))
+        {
+            EscapeInputGuard.MarkHandled();
             ExitInspection();
+        }
     }
 
     public void OpenInspection(InspectionPartType partType)
