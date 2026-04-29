@@ -4,7 +4,16 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/Lobby Scene.unity
+    guid: 68d5c2ec452b4e0c9e737da27cd88df5
+  - enabled: 1
+    path: Assets/Scenes/City Scene.unity
+    guid: 30732950372ab48888cc8f6000838078
+  - enabled: 1
+    path: Assets/Scenes/Restaurant Scene.unity
+    guid: 6492167e6bfad41dbab0c756c31baaf8
   m_configObjects:
     com.unity.dt.app-ui: {fileID: 11400000, guid: 1b1c20d82303e4b5781c3ef50ac1449f, type: 2}
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 289c1b55c9541489481df5cc06664110, type: 3}

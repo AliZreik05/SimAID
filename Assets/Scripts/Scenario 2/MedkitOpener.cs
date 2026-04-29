@@ -12,6 +12,17 @@ public class MedkitOpener : Interactable
         promptMessage = "Open medkit (E)";
     }
 
+    private void Update()
+    {
+        if (!scenarioManager ||
+            scenarioManager.CurrentState != MedicalScenarioManager.ScenarioState.InMedkitView ||
+            !Input.GetKeyDown(KeyCode.Escape))
+            return;
+
+        EscapeInputGuard.MarkHandled();
+        CloseMedkitView();
+    }
+
     protected override void Interact()
     {
         if (!scenarioManager)
@@ -40,5 +51,22 @@ public class MedkitOpener : Interactable
         medkitCamera.gameObject.SetActive(true);
         medkitCamera.enabled = true;
         mainCamera.enabled = false;
+    }
+
+    private void CloseMedkitView()
+    {
+        if (medkitCamera != null)
+        {
+            medkitCamera.enabled = false;
+            medkitCamera.gameObject.SetActive(false);
+        }
+
+        if (mainCamera != null)
+            mainCamera.enabled = true;
+
+        if (interactionPromptUI != null)
+            interactionPromptUI.SetActive(true);
+
+        scenarioManager.ExitMedkitView();
     }
 }

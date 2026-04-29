@@ -194,6 +194,8 @@ private void HandleCPRClosed(bool completed)
 {
     if (timerTexts == null || timerTexts.Length == 0) return;
 
+    ApplyTimerTextStyle();
+
     int t = Mathf.CeilToInt(bleedLeft);
     int m = t / 60;
     int s = t % 60;
@@ -234,6 +236,15 @@ private void HandleCPRClosed(bool completed)
 }
 }
 
+private void ApplyTimerTextStyle()
+{
+    timerText.enableWordWrapping = true;
+    timerText.overflowMode = TextOverflowModes.Overflow;
+    timerText.enableAutoSizing = true;
+    timerText.fontSizeMin = 14f;
+    timerText.fontSizeMax = Mathf.Max(timerText.fontSize, 24f);
+}
+
 
     private void CheckWin()
     {
@@ -248,7 +259,11 @@ private void HandleCPRClosed(bool completed)
             finished = true;
             Debug.Log("✅ SCENARIO COMPLETE");
 
-            if (winPanel) winPanel.SetActive(true);
+            if (winPanel)
+            {
+                winPanel.SetActive(true);
+                ScenarioEndMenuActions.AddReturnToMainMenuButton(winPanel);
+            }
 
             if (disableOnWin != null)
                 foreach (var m in disableOnWin)
@@ -270,10 +285,14 @@ private void HandleCPRClosed(bool completed)
         txt.text = $"Failure reason: {reason}";
 }
 
-    foreach (var panel in failPanels)
+// Activate all fail panels (VR + Desktop)
+foreach (var panel in failPanels)
 {
     if (panel != null)
+    {
         panel.SetActive(true);
+        ScenarioEndMenuActions.AddReturnToMainMenuButton(panel);
+    }
 }
 
     if (disableOnWin != null)

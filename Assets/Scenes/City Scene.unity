@@ -14788,7 +14788,7 @@ PrefabInstance:
     - target: {fileID: 415444337943193738, guid: 2f157de129ce8477796e1adbbec4bc61, type: 3}
       propertyPath: playerBody
       value: 
-      objectReference: {fileID: 126381734}
+      objectReference: {fileID: 1617423793}
     - target: {fileID: 415444337943193738, guid: 2f157de129ce8477796e1adbbec4bc61, type: 3}
       propertyPath: xSensitivity
       value: 70
@@ -14917,7 +14917,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 36ea5b37e91c44991bbe1570835fa825, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::playerinteract
-  distance: 3
+  gameplayDistance: 3
+  medkitDistance: 10
   mask:
     serializedVersion: 2
     m_Bits: 8
@@ -20105,7 +20106,7 @@ MeshRenderer:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2076065199}
-  m_Enabled: 1
+  m_Enabled: 0
   m_CastShadows: 1
   m_ReceiveShadows: 1
   m_DynamicOccludee: 1
