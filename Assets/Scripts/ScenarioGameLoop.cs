@@ -1,5 +1,6 @@
 using UnityEngine;
 using TMPro;
+using UnityEngine.XR;
 
 public class ScenarioGameLoop : MonoBehaviour
 {
@@ -186,8 +187,13 @@ private void HandleCPRClosed(bool completed)
 
     private void HandleCPRStarted()
     {
-        cprStarted = true;
+        NotifyCPRStarted();
         Debug.Log("CPR started.");
+    }
+
+    public void NotifyCPRStarted()
+    {
+        cprStarted = true;
     }
 
     private void UpdateTimerUI()
@@ -238,11 +244,16 @@ private void HandleCPRClosed(bool completed)
 
 private void ApplyTimerTextStyle()
 {
-    timerText.enableWordWrapping = true;
-    timerText.overflowMode = TextOverflowModes.Overflow;
-    timerText.enableAutoSizing = true;
-    timerText.fontSizeMin = 14f;
-    timerText.fontSizeMax = Mathf.Max(timerText.fontSize, 24f);
+   foreach (var txt in timerTexts)
+{
+    if (txt == null) continue;
+
+    txt.enableWordWrapping = true;
+    txt.overflowMode = TextOverflowModes.Overflow;
+    txt.enableAutoSizing = true;
+    txt.fontSizeMin = 14f;
+    txt.fontSizeMax = Mathf.Max(txt.fontSize, 24f);
+}
 }
 
 
@@ -275,32 +286,85 @@ private void ApplyTimerTextStyle()
     }
 
     private void Fail(string reason)
-{
-    finished = true;
-    Debug.Log($"SCENARIO FAILED: {reason}");
-
-    foreach (var txt in failReasonTexts)
-{
-    if (txt != null)
-        txt.text = $"Failure reason: {reason}";
-}
-
-// Activate all fail panels (VR + Desktop)
-foreach (var panel in failPanels)
-{
-    if (panel != null)
     {
-        panel.SetActive(true);
-        ScenarioEndMenuActions.AddReturnToMainMenuButton(panel);
+        finished = true;
+        Debug.Log($"SCENARIO FAILED: {reason}");
+
+        foreach (var txt in failReasonTexts)
+        {
+            if (txt != null)
+                txt.text = $"Failure reason: {reason}";
+        }
+
+        if (!ShouldUseVRRuntime())
+        {
+            foreach (var panel in failPanels)
+            {
+                if (panel != null)
+                {
+                    panel.SetActive(true);
+                    ScenarioEndMenuActions.AddReturnToMainMenuButton(panel);
+                }
+            }
+        }
+        else
+        {
+            bool hasVRFailPanel = HasVRFailPanel();
+
+            foreach (var panel in failPanels)
+            {
+                if (panel == null)
+                    continue;
+
+                bool shouldUsePanel = !hasVRFailPanel || IsVRFailPanel(panel);
+                panel.SetActive(shouldUsePanel);
+
+                if (shouldUsePanel)
+                    ScenarioEndMenuActions.AddReturnToMainMenuButton(panel);
+            }
+        }
+
+        if (disableOnWin != null)
+            foreach (var m in disableOnWin)
+                if (m) m.enabled = false;
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
     }
-}
 
-    if (disableOnWin != null)
-        foreach (var m in disableOnWin)
-            if (m) m.enabled = false;
+    private bool HasVRFailPanel()
+    {
+        if (failPanels == null)
+            return false;
 
-    Cursor.lockState = CursorLockMode.None;
-    Cursor.visible = true;
-}
+        foreach (GameObject panel in failPanels)
+        {
+            if (panel != null && IsVRFailPanel(panel))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsVRFailPanel(GameObject panel)
+    {
+        if (panel == null)
+            return false;
+
+        if (panel.name.ToLowerInvariant().Contains("vr"))
+            return true;
+
+        Canvas canvas = panel.GetComponentInParent<Canvas>(true);
+        return canvas != null && canvas.name.ToLowerInvariant().Contains("vr");
+    }
+
+    private static bool ShouldUseVRRuntime()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        return true;
+#else
+        return XRSettings.isDeviceActive;
+#endif
+    }
 
 }

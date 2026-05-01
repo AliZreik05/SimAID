@@ -1059,6 +1059,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ModeSelector
   desktopPlayer: {fileID: 760883072}
   vrRig: {fileID: 1255161995}
+  xrActivationTimeout: 3
 --- !u!114 &126381736
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -12517,7 +12518,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0}
   m_AnchorMax: {x: 0, y: 0}
-  m_AnchoredPosition: {x: -1.48, y: 0.9}
+  m_AnchoredPosition: {x: -1.41, y: 0.9}
   m_SizeDelta: {x: 1020.3333, y: 459.00003}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &1365347601

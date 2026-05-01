@@ -14,11 +14,13 @@ public class InputTest : MonoBehaviour
 
     // Update is called once per frame
     void Update()
-    {
-        float value = testActionValue.action.ReadValue<float>();
-        Debug.Log("VALUE : " + value);
+{
+    if (testActionValue.action == null || testActionButton.action == null)
+        return;
 
-        bool button = testActionButton.action.IsPressed();
-        Debug.Log("BUTTON : " + button);
-    }
+    float value = testActionValue.action.ReadValue<float>();
+    bool button = testActionButton.action.IsPressed();
+
+    Debug.Log($"VALUE: {value} | BUTTON: {button}");
+}
 }

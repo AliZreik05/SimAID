@@ -202,6 +202,9 @@ public class ScenarioUIPolisher : MonoBehaviour
             if (!IsRuntimeSceneObject(text.gameObject))
                 continue;
 
+            if (IsVRScenarioHudText(text))
+                continue;
+
             if (IsQuestionOrInspectionText(text))
                 continue;
 
@@ -375,6 +378,21 @@ public class ScenarioUIPolisher : MonoBehaviour
                name == "InspectionBodyText" ||
                name == "InspectionExitHintText" ||
                name == "ResultBodyText";
+    }
+
+    private static bool IsVRScenarioHudText(TMP_Text text)
+    {
+        Transform parent = text.transform;
+
+        while (parent != null)
+        {
+            if (parent.name == "VR Scenario HUD")
+                return true;
+
+            parent = parent.parent;
+        }
+
+        return false;
     }
 
     private static bool ContainsAny(string value, params string[] needles)
