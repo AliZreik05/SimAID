@@ -82,6 +82,8 @@ public class VRCPRInteraction : MonoBehaviour
     // -------------------------------------------------------------------------
     private Transform feedbackRoot;    // follows CPR_Target, holds Canvas
     private Transform placeholderRoot; // follows CPR_Target, holds hand shapes
+    private Transform patientHeadBone;
+    private Transform patientHipsBone;
 
     // UI runtime references
     private TextMeshProUGUI countText;
@@ -103,6 +105,7 @@ public class VRCPRInteraction : MonoBehaviour
     private Vector3 AnchorPos       => compressionAnchor != null
                                         ? compressionAnchor.position
                                         : transform.position;
+    private Vector3 GuideAnchorPos  => GetGuideAnchorPosition();
 
     // =========================================================================
     // Unity lifecycle
@@ -111,6 +114,7 @@ public class VRCPRInteraction : MonoBehaviour
     {
         loop = FindFirstObjectByType<ScenarioGameLoop>();
         if (compressionAnchor == null) compressionAnchor = transform;
+        CachePatientBodyBones();
 
         if (buildFeedbackUI)      CreateFeedbackCanvas();
         if (buildHandPlaceholder && handPlaceholder == null) CreatePlaceholder();
@@ -157,7 +161,10 @@ public class VRCPRInteraction : MonoBehaviour
         // Keep placeholder at chest surface
         if (placeholderRoot != null)
         {
-            placeholderRoot.position = AnchorPos + CompressionAxis * 0.055f;
+            placeholderRoot.position =
+    GuideAnchorPos
+    + CompressionAxis *  0.04f       // move DOWN torso (away from face)
+    + transform.forward * 0.035f;    // move UP (out of chest)
             placeholderRoot.rotation = Quaternion.LookRotation(transform.forward, CompressionAxis);
         }
     }
@@ -364,7 +371,7 @@ public class VRCPRInteraction : MonoBehaviour
     {
         if (Vector3.Distance(leftHand.position, rightHand.position) > maxHandSeparation)
             return false;
-        Vector3 anchor = AnchorPos;
+        Vector3 anchor = GuideAnchorPos;
         return Vector3.Distance(leftHand.position,  anchor) <= handPlacementRadius
             && Vector3.Distance(rightHand.position, anchor) <= handPlacementRadius;
     }
@@ -401,6 +408,36 @@ public class VRCPRInteraction : MonoBehaviour
     {
         if (snappedHandsVisual != null && snappedHandsVisual.activeSelf != show)
             snappedHandsVisual.SetActive(show);
+    }
+
+    private void CachePatientBodyBones()
+    {
+        Animator animator = GetComponentInParent<Animator>();
+        if (animator == null || !animator.isHuman)
+            return;
+
+        patientHeadBone = animator.GetBoneTransform(HumanBodyBones.Head);
+        patientHipsBone = animator.GetBoneTransform(HumanBodyBones.Hips);
+    }
+
+    private Vector3 GetGuideAnchorPosition()
+    {
+        Vector3 bodyAxis = Vector3.zero;
+
+        if (patientHeadBone != null && patientHipsBone != null)
+        {
+            bodyAxis = Vector3.ProjectOnPlane(patientHipsBone.position - patientHeadBone.position, CompressionAxis);
+        }
+
+        if (bodyAxis.sqrMagnitude < 0.0001f)
+        {
+            bodyAxis = Vector3.ProjectOnPlane(transform.forward, CompressionAxis);
+        }
+
+        if (bodyAxis.sqrMagnitude < 0.0001f)
+            return AnchorPos;
+
+        return AnchorPos + bodyAxis.normalized * guideTorsoOffset;
     }
 
     // =========================================================================
@@ -663,11 +700,15 @@ public class VRCPRInteraction : MonoBehaviour
     [SerializeField] private Vector3 bottomHandEuler = new Vector3(270f, 0f, 180f);
     [SerializeField] private Vector3 topHandEuler    = new Vector3(270f, 0f, 180f);
     [SerializeField] private float guideHandScale = 0.36f;
+    [SerializeField] private float guideTorsoOffset = -0.045f;
 
     private void CreatePlaceholder()
     {
         placeholderRoot          = new GameObject("CPR Hand Placeholder Root").transform;
-        placeholderRoot.position = AnchorPos + CompressionAxis * 0.055f;
+        placeholderRoot.position =
+    GuideAnchorPos
+    + CompressionAxis * 0.04f
+    + transform.forward * 0.035f;
         placeholderRoot.rotation = Quaternion.LookRotation(transform.forward, CompressionAxis);
 
         // Use the real skeletal hand models. Do not show primitive placeholders.
@@ -733,7 +774,7 @@ public class VRCPRInteraction : MonoBehaviour
         top.transform.localScale = Vector3.one * handScale;
         PrepareGuideHandClone(top);
         ApplyGreenMaterial(top, greenMaterial);
-        SetHandGrip(top, 1f, 1f); // fist/grip on top of lower hand
+        SetHandGrip(top, 0.55f, 0.2f); // half grip on top of lower hand
     }
 
     private static void PrepareGuideHandClone(GameObject hand)
