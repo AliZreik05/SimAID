@@ -29,6 +29,8 @@ public class VRCPRInteraction : MonoBehaviour
     [Header("Hand Tracking")]
     [SerializeField] private Transform leftHand;
     [SerializeField] private Transform rightHand;
+    [SerializeField] private Transform leftHandVisual;
+    [SerializeField] private Transform rightHandVisual;
     [Tooltip("Point the hands must be near to enter CPR mode. Defaults to this transform.")]
     [SerializeField] private Transform compressionAnchor;
     [SerializeField] private float handPlacementRadius = 0.28f;
@@ -69,6 +71,7 @@ public class VRCPRInteraction : MonoBehaviour
     private float topHeight, bottomHeight, currentDepth;
     private Vector3 strokeStartPos;
     private float   handsLostAt = -1f;
+    private float snappedAxisOffset;
 
     private int  goodCompressions;
     private bool notifiedStarted;
@@ -82,8 +85,17 @@ public class VRCPRInteraction : MonoBehaviour
     // -------------------------------------------------------------------------
     private Transform feedbackRoot;    // follows CPR_Target, holds Canvas
     private Transform placeholderRoot; // follows CPR_Target, holds hand shapes
+    private Transform bottomGuideHand;
+    private Transform topGuideHand;
     private Transform patientHeadBone;
     private Transform patientHipsBone;
+    private Transform leftVisualOriginalParent;
+    private Transform rightVisualOriginalParent;
+    private Vector3 leftVisualOriginalLocalPosition;
+    private Vector3 rightVisualOriginalLocalPosition;
+    private Quaternion leftVisualOriginalLocalRotation;
+    private Quaternion rightVisualOriginalLocalRotation;
+    private bool visualPoseCached;
 
     // UI runtime references
     private TextMeshProUGUI countText;
@@ -102,10 +114,12 @@ public class VRCPRInteraction : MonoBehaviour
     // Helpers
     // -------------------------------------------------------------------------
     private Vector3 CompressionAxis => transform.up.normalized;
+    private Vector3 CompressionMovementAxis => transform.forward.normalized;
     private Vector3 AnchorPos       => compressionAnchor != null
                                         ? compressionAnchor.position
                                         : transform.position;
     private Vector3 GuideAnchorPos  => GetGuideAnchorPosition();
+    private Vector3 GuideWorldPos   => GuideAnchorPos + CompressionAxis * 0.04f + transform.forward * 0.035f;
 
     // =========================================================================
     // Unity lifecycle
@@ -130,6 +144,7 @@ public class VRCPRInteraction : MonoBehaviour
 
     private void OnDisable()
     {
+        RestoreHandVisuals();
         ShowSnappedHands(false);
     }
 
@@ -141,17 +156,17 @@ public class VRCPRInteraction : MonoBehaviour
 
     private void LateUpdate()
     {
-        // Keep Canvas above chest, always facing the player, correct side forward
+        // Keep Canvas near the CPR target so it is readable while compressing.
         if (feedbackRoot != null)
         {
-            Vector3 above = transform.position + Vector3.up * 0.45f;
-            feedbackRoot.position = above;
+            Vector3 uiPos = GuideWorldPos + CompressionAxis * 0.24f + transform.forward * 0.18f;
+            feedbackRoot.position = uiPos;
 
             Camera cam = Camera.main;
             if (cam != null)
             {
                 // Panel must face the camera: +Z away from camera so the front (-Z) faces toward it
-                Vector3 toCam = cam.transform.position - above;
+                Vector3 toCam = cam.transform.position - uiPos;
                 Vector3 flat  = new Vector3(toCam.x, 0f, toCam.z);
                 if (flat.sqrMagnitude > 0.01f)
                     feedbackRoot.rotation = Quaternion.LookRotation(-flat.normalized);
@@ -161,12 +176,12 @@ public class VRCPRInteraction : MonoBehaviour
         // Keep placeholder at chest surface
         if (placeholderRoot != null)
         {
-            placeholderRoot.position =
-    GuideAnchorPos
-    + CompressionAxis *  0.04f       // move DOWN torso (away from face)
-    + transform.forward * 0.035f;    // move UP (out of chest)
+            placeholderRoot.position = GuideWorldPos;
             placeholderRoot.rotation = Quaternion.LookRotation(transform.forward, CompressionAxis);
         }
+
+        if (session == SessionState.ActiveCPR)
+            ApplySnappedHandPose();
     }
 
     private void Update()
@@ -196,16 +211,8 @@ public class VRCPRInteraction : MonoBehaviour
             return;
         }
 
-        // session == ActiveCPR
-        if (!placed)
-        {
-            HandleHandsLost();
-            RefreshUI();
-            UpdateDepthVisual();
-            return;
-        }
-        handsLostAt = -1f;
-
+        // session == ActiveCPR. Once snapped in, do not exit CPR just because
+        // tracked hands drift laterally; the visual hands are constrained below.
         TickCompressionDetection();
         UpdateBpm();
 
@@ -262,8 +269,8 @@ public class VRCPRInteraction : MonoBehaviour
 
         // Vertical-dominance check
         Vector3 delta   = endPos - strokeStartPos;
-        float   vert    = Mathf.Abs(Vector3.Dot(delta, CompressionAxis));
-        float   lateral = Vector3.ProjectOnPlane(delta, CompressionAxis).magnitude;
+        float   vert    = Mathf.Abs(Vector3.Dot(delta, CompressionMovementAxis));
+        float   lateral = Vector3.ProjectOnPlane(delta, CompressionMovementAxis).magnitude;
         float   total   = vert + lateral;
         if (total > 0.0001f && vert / total < verticalDominanceMin) return;
 
@@ -313,9 +320,12 @@ public class VRCPRInteraction : MonoBehaviour
         strokeStartPos = GetAverageHandPos();
         handsLostAt    = -1f;
         currentDepth   = 0f;
+        snappedAxisOffset = 0f;
 
+        CacheHandVisuals();
         ShowPlaceholder(false);
         ShowSnappedHands(true);
+        ApplySnappedHandPose();
         NotifyStarted();
     }
 
@@ -335,6 +345,7 @@ public class VRCPRInteraction : MonoBehaviour
     {
         session = SessionState.Complete;
         ShowPlaceholder(false);
+        RestoreHandVisuals();
         ShowSnappedHands(false);
 
         if (loop != null) loop.NotifyCPRDone();
@@ -360,6 +371,8 @@ public class VRCPRInteraction : MonoBehaviour
         handsLostAt    = -1f;
         goodCompressions = 0;
         notifiedStarted  = false;
+        snappedAxisOffset = 0f;
+        RestoreHandVisuals();
         compressionTimes.Clear();
         currentBpm = 0f;
     }
@@ -371,13 +384,13 @@ public class VRCPRInteraction : MonoBehaviour
     {
         if (Vector3.Distance(leftHand.position, rightHand.position) > maxHandSeparation)
             return false;
-        Vector3 anchor = GuideAnchorPos;
+        Vector3 anchor = GuideWorldPos;
         return Vector3.Distance(leftHand.position,  anchor) <= handPlacementRadius
             && Vector3.Distance(rightHand.position, anchor) <= handPlacementRadius;
     }
 
     private float   GetAverageHandHeight() =>
-        Vector3.Dot((leftHand.position + rightHand.position) * 0.5f, CompressionAxis);
+        Vector3.Dot((leftHand.position + rightHand.position) * 0.5f, CompressionMovementAxis);
 
     private Vector3 GetAverageHandPos() =>
         (leftHand.position + rightHand.position) * 0.5f;
@@ -386,6 +399,8 @@ public class VRCPRInteraction : MonoBehaviour
     {
         if (leftHand  == null) leftHand  = FindHand("Left Hand",  "LeftHand",  "Left Direct Interactor");
         if (rightHand == null) rightHand = FindHand("Right Hand", "RightHand", "Right Direct Interactor");
+        if (leftHandVisual == null) leftHandVisual = FindSceneHandVisual("Left Hand Model");
+        if (rightHandVisual == null) rightHandVisual = FindSceneHandVisual("Right Hand Model");
     }
 
     private static Transform FindHand(params string[] names)
@@ -398,6 +413,33 @@ public class VRCPRInteraction : MonoBehaviour
         return null;
     }
 
+    private static Transform FindSceneHandVisual(string exactName)
+    {
+        Transform[] transforms = FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform t = transforms[i];
+            if (t == null || t.name != exactName || IsUnderCprGuide(t))
+                continue;
+
+            return t;
+        }
+
+        return null;
+    }
+
+    private static bool IsUnderCprGuide(Transform t)
+    {
+        while (t != null)
+        {
+            if (t.name.Contains("CPR"))
+                return true;
+            t = t.parent;
+        }
+
+        return false;
+    }
+
     private void ShowPlaceholder(bool show)
     {
         if (handPlaceholder  != null && handPlaceholder.activeSelf  != show) handPlaceholder.SetActive(show);
@@ -408,6 +450,64 @@ public class VRCPRInteraction : MonoBehaviour
     {
         if (snappedHandsVisual != null && snappedHandsVisual.activeSelf != show)
             snappedHandsVisual.SetActive(show);
+    }
+
+    private void ApplySnappedHandPose()
+    {
+        if (leftHand == null || rightHand == null || bottomGuideHand == null || topGuideHand == null)
+            return;
+
+        Vector3 rawAverage = (leftHand.position + rightHand.position) * 0.5f;
+        float rawOffset = Vector3.Dot(rawAverage - GuideWorldPos, CompressionMovementAxis);
+        snappedAxisOffset = Mathf.Clamp(rawOffset, -compressionDepthMeters * 1.25f, recoilToleranceMeters * 2f);
+        Vector3 compressionOnlyOffset = CompressionMovementAxis * snappedAxisOffset;
+
+        Transform leftVisual = leftHandVisual != null ? leftHandVisual : leftHand;
+        Transform rightVisual = rightHandVisual != null ? rightHandVisual : rightHand;
+        leftVisual.SetPositionAndRotation(bottomGuideHand.position + compressionOnlyOffset, bottomGuideHand.rotation);
+        rightVisual.SetPositionAndRotation(topGuideHand.position + compressionOnlyOffset, topGuideHand.rotation);
+    }
+
+    private void CacheHandVisuals()
+    {
+        if (visualPoseCached)
+            return;
+
+        if (leftHandVisual != null)
+        {
+            leftVisualOriginalParent = leftHandVisual.parent;
+            leftVisualOriginalLocalPosition = leftHandVisual.localPosition;
+            leftVisualOriginalLocalRotation = leftHandVisual.localRotation;
+        }
+
+        if (rightHandVisual != null)
+        {
+            rightVisualOriginalParent = rightHandVisual.parent;
+            rightVisualOriginalLocalPosition = rightHandVisual.localPosition;
+            rightVisualOriginalLocalRotation = rightHandVisual.localRotation;
+        }
+
+        visualPoseCached = true;
+    }
+
+    private void RestoreHandVisuals()
+    {
+        if (!visualPoseCached)
+            return;
+
+        if (leftHandVisual != null && leftHandVisual.parent == leftVisualOriginalParent)
+        {
+            leftHandVisual.localPosition = leftVisualOriginalLocalPosition;
+            leftHandVisual.localRotation = leftVisualOriginalLocalRotation;
+        }
+
+        if (rightHandVisual != null && rightHandVisual.parent == rightVisualOriginalParent)
+        {
+            rightHandVisual.localPosition = rightVisualOriginalLocalPosition;
+            rightHandVisual.localRotation = rightVisualOriginalLocalRotation;
+        }
+
+        visualPoseCached = false;
     }
 
     private void CachePatientBodyBones()
@@ -762,6 +862,7 @@ public class VRCPRInteraction : MonoBehaviour
         bottom.transform.localPosition = new Vector3(0f, 0.014f, 0f);
         bottom.transform.localEulerAngles = palmDownEuler;
         bottom.transform.localScale = Vector3.one * handScale;
+        bottomGuideHand = bottom.transform;
         PrepareGuideHandClone(bottom);
         ApplyGreenMaterial(bottom, greenMaterial);
         SetHandGrip(bottom, 0f, 0f); // open palm resting on chest
@@ -772,6 +873,7 @@ public class VRCPRInteraction : MonoBehaviour
         top.transform.localPosition    = new Vector3(0f, 0.04f, 0f);
         top.transform.localEulerAngles = palmDownEuler;
         top.transform.localScale = Vector3.one * handScale;
+        topGuideHand = top.transform;
         PrepareGuideHandClone(top);
         ApplyGreenMaterial(top, greenMaterial);
         SetHandGrip(top, 0.55f, 0.2f); // half grip on top of lower hand
