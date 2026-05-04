@@ -72,6 +72,8 @@ public class VRCPRInteraction : MonoBehaviour
     private Vector3 strokeStartPos;
     private float   handsLostAt = -1f;
     private float snappedAxisOffset;
+    private float snapEntryOffset; // baseline offset captured at CPR entry
+    private const float TargetBpm = 110f;
 
     private int  goodCompressions;
     private bool notifiedStarted;
@@ -105,6 +107,8 @@ public class VRCPRInteraction : MonoBehaviour
     private Image           depthIndicatorImage; // its colour changes per quality
     private RectTransform   bpmDot;              // the blue dot on the BPM bar
     private Image           bpmDotImage;
+    private RectTransform   rhythmTarget;        // oscillating target on depth bar
+    private Image           rhythmTargetImage;
 
     // Bar half-extents in Canvas units
     private const float DepthBarHalfH = 62f;
@@ -140,12 +144,23 @@ public class VRCPRInteraction : MonoBehaviour
         ShowPlaceholder(true);
         ShowSnappedHands(false);
         RefreshUI();
+        Application.onBeforeRender += OnBeforeRenderApplyPose;
     }
 
     private void OnDisable()
     {
+        Application.onBeforeRender -= OnBeforeRenderApplyPose;
         RestoreHandVisuals();
         ShowSnappedHands(false);
+    }
+
+    // Runs AFTER XR Hands / XR Interaction Toolkit have written controller-driven
+    // poses for the frame, so our snapped CPR pose wins and the visuals do not
+    // fight the rig (which previously caused the vibrating-in-place behaviour).
+    private void OnBeforeRenderApplyPose()
+    {
+        if (session == SessionState.ActiveCPR)
+            ApplySnappedHandPose();
     }
 
     private void OnDestroy()
@@ -219,6 +234,7 @@ public class VRCPRInteraction : MonoBehaviour
         RefreshUI();
         UpdateDepthVisual();
         UpdateBpmDotVisual();
+        UpdateRhythmTargetVisual();
     }
 
     // =========================================================================
@@ -267,6 +283,12 @@ public class VRCPRInteraction : MonoBehaviour
         float depth = topHeight - bottomHeight;
         if (depth < compressionDepthMeters) return;
 
+        // Only count if the player's real hands are still over the chest.
+        // Without this, any vertical bob anywhere in the room would tick the
+        // counter once snapped in.
+        float distToChest = Vector3.Distance(endPos, GuideWorldPos);
+        if (distToChest > handPlacementRadius * 1.4f) return;
+
         // Vertical-dominance check
         Vector3 delta   = endPos - strokeStartPos;
         float   vert    = Mathf.Abs(Vector3.Dot(delta, CompressionMovementAxis));
@@ -278,9 +300,8 @@ public class VRCPRInteraction : MonoBehaviour
         while (compressionTimes.Count > BpmSamples) compressionTimes.Dequeue();
         UpdateBpm();
 
-        // Only count if BPM is within acceptable window
-        if (ClassifyBpm(currentBpm) == BpmQuality.Bad) return;
-
+        // BPM is shown for feedback only; depth + vertical-dominance already
+        // qualified this stroke as a real compression, so always count it.
         goodCompressions++;
         if (goodCompressions >= requiredGoodCompressions) Complete();
     }
@@ -321,6 +342,11 @@ public class VRCPRInteraction : MonoBehaviour
         handsLostAt    = -1f;
         currentDepth   = 0f;
         snappedAxisOffset = 0f;
+
+        // Baseline so the visual hands sit exactly on the guide at snap-in,
+        // regardless of where the player was holding their controllers.
+        Vector3 entryAvg = (leftHand.position + rightHand.position) * 0.5f;
+        snapEntryOffset  = Vector3.Dot(entryAvg - GuideWorldPos, CompressionMovementAxis);
 
         CacheHandVisuals();
         ShowPlaceholder(false);
@@ -372,6 +398,7 @@ public class VRCPRInteraction : MonoBehaviour
         goodCompressions = 0;
         notifiedStarted  = false;
         snappedAxisOffset = 0f;
+        snapEntryOffset  = 0f;
         RestoreHandVisuals();
         compressionTimes.Clear();
         currentBpm = 0f;
@@ -458,8 +485,11 @@ public class VRCPRInteraction : MonoBehaviour
             return;
 
         Vector3 rawAverage = (leftHand.position + rightHand.position) * 0.5f;
-        float rawOffset = Vector3.Dot(rawAverage - GuideWorldPos, CompressionMovementAxis);
-        snappedAxisOffset = Mathf.Clamp(rawOffset, -compressionDepthMeters * 1.25f, recoilToleranceMeters * 2f);
+        float rawOffset    = Vector3.Dot(rawAverage - GuideWorldPos, CompressionMovementAxis);
+        // Subtract entry baseline so the visual hands appear exactly on the guide
+        // at snap-in and only deviate as the player moves vertically from there.
+        float relOffset    = rawOffset - snapEntryOffset;
+        snappedAxisOffset  = Mathf.Clamp(relOffset, -compressionDepthMeters * 2f, compressionDepthMeters);
         Vector3 compressionOnlyOffset = CompressionMovementAxis * snappedAxisOffset;
 
         Transform leftVisual = leftHandVisual != null ? leftHandVisual : leftHand;
@@ -567,9 +597,9 @@ public class VRCPRInteraction : MonoBehaviour
             if (session == SessionState.WaitingForHands || leftHand == null || rightHand == null)
                 hintText.text = "Place both hands on the chest";
             else if (session == SessionState.ActiveCPR)
-                hintText.text = ClassifyBpm(currentBpm) == BpmQuality.Bad
-                    ? "Adjust rhythm  (~110 / min)"
-                    : "Compress down & release fully";
+                hintText.text = CurrentBeatPhase() > 0.5f
+                    ? "DOWN — press into chest"
+                    : "UP — release fully";
             else
                 hintText.text = "CPR objective complete!";
         }
@@ -598,6 +628,33 @@ public class VRCPRInteraction : MonoBehaviour
                     : new Color(0.9f, 0.25f, 0.25f); // red – too shallow
             depthIndicatorImage.color = c;
         }
+    }
+
+    // 0 = release (top of stroke, hands up), 1 = press (fully compressed)
+    private float CurrentBeatPhase()
+    {
+        float w = Mathf.Sin(Time.time * 2f * Mathf.PI * (TargetBpm / 60f));
+        return (w + 1f) * 0.5f;
+    }
+
+    private void UpdateRhythmTargetVisual()
+    {
+        if (rhythmTarget == null) return;
+
+        if (session != SessionState.ActiveCPR)
+        {
+            if (rhythmTargetImage != null) rhythmTargetImage.color = Color.clear;
+            return;
+        }
+
+        if (rhythmTargetImage != null)
+            rhythmTargetImage.color = new Color(0.15f, 0.55f, 1f, 0.95f);
+
+        // Bottom of bar (norm 0) = release; ~0.85 = green compress zone
+        float beat = CurrentBeatPhase();
+        float norm = Mathf.Lerp(0f, 0.85f, beat);
+        float y    = Mathf.Lerp(-DepthBarHalfH, DepthBarHalfH, norm);
+        rhythmTarget.anchoredPosition = new Vector2(0f, y);
     }
 
     private void UpdateBpmDotVisual()
@@ -707,6 +764,15 @@ public class VRCPRInteraction : MonoBehaviour
             color: Color.white);
         depthIndicator      = ind;
         depthIndicatorImage = ind.GetComponent<Image>();
+
+        // Blue rhythm target — oscillates between bottom (release) and the
+        // green compress zone at TargetBpm. Player matches the white bar to it.
+        RectTransform tgt = MakeImage(bg, "RhythmTarget",
+            pos: new Vector2(0f, -DepthBarHalfH),
+            size: new Vector2(60f, 4f),
+            color: new Color(0.15f, 0.55f, 1f, 0.95f));
+        rhythmTarget      = tgt;
+        rhythmTargetImage = tgt.GetComponent<Image>();
     }
 
     // ── BPM bar: horizontal rainbow segments + sliding blue dot ───────────────
