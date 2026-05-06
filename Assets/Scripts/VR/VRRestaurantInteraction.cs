@@ -71,10 +71,7 @@ public class VRRestaurantInteraction : MonoBehaviour
     private Canvas scenarioCanvas;
     private RectTransform questionPanelRect;
     private RectTransform answerPanelRect;
-    private RectTransform resultPanelRect;
     private TMP_Text answerText;
-    private TMP_Text resultTitleText;
-    private TMP_Text resultBodyText;
     private GameObject sourceObjectiveBanner;
 
     private LineRenderer pointerLine;
@@ -115,7 +112,7 @@ public class VRRestaurantInteraction : MonoBehaviour
     private bool hasPendingInspectionClue;
     private float inspectionClueFadeStartTime = -1f;
 
-    private const float VrMedkitItemScale = 0.333f;
+    private const float VrMedkitItemScale = 0.1f;
 
     private const float pointerLineWidth = 0.005f;
 
@@ -386,7 +383,6 @@ public class VRRestaurantInteraction : MonoBehaviour
         scenarioCanvas = FindCanvasByName("ScenarioCanvas");
         questionPanelRect = FindRectByName("QuestionPanel");
         answerPanelRect = FindRectByName("AnswerPanel");
-        resultPanelRect = FindRectByName("ResultPanel");
 
         foreach (TMP_Text text in FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
@@ -396,14 +392,8 @@ public class VRRestaurantInteraction : MonoBehaviour
             if (text != null && text.name == "AnswerText")
             {
                 answerText = text;
-                continue;
+                break;
             }
-
-            if (text != null && text.name == "ResultTitleText")
-                resultTitleText = text;
-
-            if (text != null && text.name == "ResultBodyText")
-                resultBodyText = text;
         }
     }
 
@@ -456,8 +446,7 @@ public class VRRestaurantInteraction : MonoBehaviour
         if (scenarioManager == null) scenarioManager = FindFirstObjectByType<MedicalScenarioManager>();
         if (inspectionManager == null) inspectionManager = FindFirstObjectByType<InspectionManager>();
         if (medkitViewRoot == null) FindMedkitViewRoot();
-        if (scenarioCanvas == null || questionPanelRect == null || answerPanelRect == null || resultPanelRect == null)
-            FindScenarioUiReferences();
+        if (scenarioCanvas == null || questionPanelRect == null || answerPanelRect == null) FindScenarioUiReferences();
 
         // Force XR camera dominance every frame: InspectionManager.OpenInspection() and
         // MedkitOpener.Interact() both disable the main camera and enable an auxiliary
@@ -759,14 +748,9 @@ public class VRRestaurantInteraction : MonoBehaviour
                 : new Vector2(1040f, 320f);
         }
 
-        bool resultActive = IsResultPanelActive();
-        if (resultActive)
-            ConfigureVrResultPanel();
-
         bool dialogueUiActive =
             questionActive ||
-            answerActive ||
-            resultActive;
+            answerActive;
 
         if (!dialogueUiActive)
             return;
@@ -838,46 +822,6 @@ public class VRRestaurantInteraction : MonoBehaviour
     private bool IsAnswerPanelActive()
     {
         return answerPanelRect != null && answerPanelRect.gameObject.activeInHierarchy;
-    }
-
-    private bool IsResultPanelActive()
-    {
-        return resultPanelRect != null && resultPanelRect.gameObject.activeInHierarchy;
-    }
-
-    private void ConfigureVrResultPanel()
-    {
-        if (resultPanelRect == null)
-            return;
-
-        resultPanelRect.anchorMin = resultPanelRect.anchorMax = new Vector2(0.5f, 0.5f);
-        resultPanelRect.pivot = new Vector2(0.5f, 0.5f);
-        resultPanelRect.anchoredPosition = Vector2.zero;
-        resultPanelRect.sizeDelta = new Vector2(960f, 560f);
-
-        foreach (Image image in resultPanelRect.GetComponentsInChildren<Image>(true))
-        {
-            if (image != null)
-                image.color = new Color(0f, 0f, 0f, 0.78f);
-        }
-
-        ConfigureResultText(resultTitleText, 42f, TextAlignmentOptions.Center, false);
-        ConfigureResultText(resultBodyText, 25f, TextAlignmentOptions.TopLeft, true);
-    }
-
-    private static void ConfigureResultText(TMP_Text text, float fontSize, TextAlignmentOptions alignment, bool forceWhite)
-    {
-        if (text == null)
-            return;
-
-        text.gameObject.SetActive(true);
-        text.enabled = true;
-        if (forceWhite)
-            text.color = Color.white;
-        text.fontSize = Mathf.Max(text.fontSize, fontSize);
-        text.textWrappingMode = TextWrappingModes.Normal;
-        text.overflowMode = TextOverflowModes.Overflow;
-        text.alignment = alignment;
     }
 
     private void HideSourceObjectiveText()
