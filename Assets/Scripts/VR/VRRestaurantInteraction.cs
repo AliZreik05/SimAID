@@ -105,6 +105,15 @@ public class VRRestaurantInteraction : MonoBehaviour
     private InspectionPartType pendingInspectionCluePart;
     private bool hasPendingInspectionClue;
     private float inspectionClueFadeStartTime = -1f;
+    private bool medkitDesktopTextHidden;
+
+    // White-void mode: camera clear = solid white + all scene renderers hidden except target.
+    private Renderer[] sceneRenderers;
+    private bool[] sceneRendererWasEnabled;
+    private CameraClearFlags savedClearFlags;
+    private Color savedBackgroundColor;
+    private bool inWhiteVoidMode;
+    private GameObject currentWhiteVoidTarget;
 
     private const float pointerLineWidth = 0.005f;
 
@@ -180,6 +189,7 @@ public class VRRestaurantInteraction : MonoBehaviour
         ConfigureHandsForNearView();
         BuildObjectiveHud();
         BuildPointerLine();
+        CacheSceneRenderers();
     }
 
     private void OnDestroy()
@@ -426,6 +436,75 @@ public class VRRestaurantInteraction : MonoBehaviour
         pointerLine.startColor = new Color(0.2f, 0.7f, 1f, 0.85f);
         pointerLine.endColor = new Color(0.2f, 0.7f, 1f, 0.0f);
         pointerLine.enabled = false;
+    }
+
+    // Snapshot every scene Renderer except children of this VR manager (pointer line, etc.).
+    // Called once at Awake so the list is ready before any mode switch.
+    private void CacheSceneRenderers()
+    {
+        Renderer[] all = FindObjectsByType<Renderer>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        var list = new System.Collections.Generic.List<Renderer>(all.Length);
+        foreach (Renderer r in all)
+        {
+            if (r != null && !r.transform.IsChildOf(transform))
+                list.Add(r);
+        }
+        sceneRenderers = list.ToArray();
+        sceneRendererWasEnabled = new bool[sceneRenderers.Length];
+    }
+
+    // Hide all scene renderers except keepVisible's hierarchy; set camera bg to solid white.
+    private void EnterWhiteVoidMode(GameObject keepVisible)
+    {
+        if (xrCamera == null) return;
+        if (inWhiteVoidMode && currentWhiteVoidTarget == keepVisible) return;
+
+        ExitWhiteVoidMode();
+
+        savedClearFlags = xrCamera.clearFlags;
+        savedBackgroundColor = xrCamera.backgroundColor;
+        xrCamera.clearFlags = CameraClearFlags.SolidColor;
+        xrCamera.backgroundColor = Color.white;
+
+        if (sceneRenderers == null) CacheSceneRenderers();
+
+        for (int i = 0; i < sceneRenderers.Length; i++)
+        {
+            if (sceneRenderers[i] == null) continue;
+            sceneRendererWasEnabled[i] = sceneRenderers[i].enabled;
+
+            bool keep = keepVisible != null &&
+                (sceneRenderers[i].gameObject == keepVisible ||
+                 sceneRenderers[i].transform.IsChildOf(keepVisible.transform));
+            if (!keep)
+                sceneRenderers[i].enabled = false;
+        }
+
+        inWhiteVoidMode = true;
+        currentWhiteVoidTarget = keepVisible;
+    }
+
+    private void ExitWhiteVoidMode()
+    {
+        if (!inWhiteVoidMode) return;
+
+        if (xrCamera != null)
+        {
+            xrCamera.clearFlags = savedClearFlags;
+            xrCamera.backgroundColor = savedBackgroundColor;
+        }
+
+        if (sceneRenderers != null && sceneRendererWasEnabled != null)
+        {
+            for (int i = 0; i < sceneRenderers.Length && i < sceneRendererWasEnabled.Length; i++)
+            {
+                if (sceneRenderers[i] != null)
+                    sceneRenderers[i].enabled = sceneRendererWasEnabled[i];
+            }
+        }
+
+        inWhiteVoidMode = false;
+        currentWhiteVoidTarget = null;
     }
 
     private void Update()
@@ -1188,8 +1267,6 @@ public class VRRestaurantInteraction : MonoBehaviour
             if (inspectionRepositioned)
                 inspectionRepositioned = false;
             RestoreInspectionObjectScale();
-            if (inspectionBackdropRoot != null && inspectionBackdropRoot.activeSelf)
-                inspectionBackdropRoot.SetActive(false);
             return;
         }
 
@@ -1222,7 +1299,19 @@ public class VRRestaurantInteraction : MonoBehaviour
         Quaternion baseRotation = Quaternion.LookRotation(-flatForward, Vector3.up);
         if (part == InspectionPartType.Chest)
             baseRotation *= Quaternion.Euler(0f, 180f, 0f);
-        targetObject.transform.rotation = baseRotation;
+
+        // Chest: pivot and mesh are the same object, so apply yaw via world rotation
+        // to avoid the localRotation setter conflicting with the world rotation setter.
+        if (part == InspectionPartType.Chest)
+        {
+            Vector2 chestStick = ReadRightStickInput();
+            inspectionYaw = Mathf.Clamp(inspectionYaw + chestStick.x * 90f * Time.deltaTime, -60f, 60f);
+            targetObject.transform.rotation = baseRotation * Quaternion.Euler(0f, inspectionYaw, 0f);
+        }
+        else
+        {
+            targetObject.transform.rotation = baseRotation;
+        }
 
         Vector3 desiredCenter = xrCamera.transform.position
             + flatForward * 1.15f
@@ -1232,7 +1321,8 @@ public class VRRestaurantInteraction : MonoBehaviour
         else
             targetObject.transform.position = desiredCenter;
 
-        ApplyInspectionStickRotation(rotationRoot, part);
+        if (part != InspectionPartType.Chest)
+            ApplyInspectionStickRotation(rotationRoot, part);
         HandleInspectionBackdropFollow(flatForward, desiredCenter);
     }
 
@@ -1286,6 +1376,18 @@ public class VRRestaurantInteraction : MonoBehaviour
         }
     }
 
+    private static Vector2 ReadRightStickInput()
+    {
+        InputDevice device = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+        if (!device.isValid)
+            return Vector2.zero;
+        Vector2 axis = Vector2.zero;
+        device.TryGetFeatureValue(CommonUsages.primary2DAxis, out axis);
+        if (axis.sqrMagnitude < 0.04f)
+            device.TryGetFeatureValue(CommonUsages.secondary2DAxis, out axis);
+        return axis;
+    }
+
     private void CaptureInspectionObjectScale(GameObject targetObject)
     {
         if (targetObject == null)
@@ -1324,16 +1426,7 @@ public class VRRestaurantInteraction : MonoBehaviour
 
     private void HandleInspectionBackdropFollow(Vector3 flatForward, Vector3 desiredCenter)
     {
-        EnsureInspectionBackdrop();
-        if (inspectionBackdropRoot == null || xrCamera == null)
-            return;
-
-        inspectionBackdropRoot.SetActive(true);
-        Vector3 pos = xrCamera.transform.position
-            + flatForward * 1.35f
-            + Vector3.down * 0.02f;
-        inspectionBackdropRoot.transform.position = pos;
-        inspectionBackdropRoot.transform.rotation = Quaternion.LookRotation(pos - xrCamera.transform.position, Vector3.up);
+        // White void is handled by camera clear colour — nothing to update.
     }
 
     private void HandleSecondaryButtonExitInspection()
@@ -1424,6 +1517,13 @@ public class VRRestaurantInteraction : MonoBehaviour
         if (medkitBackdropRoot != null)
             medkitBackdropRoot.SetActive(true);
 
+        // Hide the 3-D scene's own "Choose the…" label (not VR-friendly).
+        if (!medkitDesktopTextHidden)
+        {
+            HideMedkitDesktopText();
+            medkitDesktopTextHidden = true;
+        }
+
         Vector3 forward = xrCamera.transform.forward;
         forward.y = 0f;
         if (forward.sqrMagnitude < 0.001f)
@@ -1446,14 +1546,7 @@ public class VRRestaurantInteraction : MonoBehaviour
         else
             medkitViewRoot.position = targetCenter;
 
-        if (medkitBackdropRoot != null)
-        {
-            Vector3 pos = xrCamera.transform.position
-                + forward * 1.55f
-                + Vector3.down * 0.02f;
-            medkitBackdropRoot.transform.position = pos;
-            medkitBackdropRoot.transform.rotation = Quaternion.LookRotation(pos - xrCamera.transform.position, Vector3.up);
-        }
+        // Backdrop is camera-parented — no manual positioning needed.
     }
 
     private void HideRealMedkitView()
@@ -1466,6 +1559,7 @@ public class VRRestaurantInteraction : MonoBehaviour
         medkitViewRoot.localScale = medkitViewOriginalScale;
         if (medkitBackdropRoot != null && medkitBackdropRoot.activeSelf)
             medkitBackdropRoot.SetActive(false);
+        medkitDesktopTextHidden = false;
     }
 
     private void ApplyMedkitScaleForVr()
@@ -1473,28 +1567,21 @@ public class VRRestaurantInteraction : MonoBehaviour
         if (medkitViewRoot == null)
             return;
 
+        // Skip if no renderers found yet (children may still be activating).
         if (!TryGetRendererBounds(medkitViewRoot.gameObject, out Bounds bounds))
-        {
-            medkitViewRoot.localScale *= 0.25f;
             return;
-        }
 
         float maxDimension = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
         if (maxDimension <= 0.001f)
             return;
 
-        float factor = Mathf.Min(0.65f, 1.85f / maxDimension);
-        medkitViewRoot.localScale *= factor;
+        // Scale so the largest world-space axis = 1.8 m. No cap — allow upscaling.
+        medkitViewRoot.localScale *= 1.8f / maxDimension;
     }
 
     private void EnsureInspectionBackdrop()
     {
-        if (inspectionBackdropRoot != null)
-            return;
-
-        inspectionBackdropRoot = BuildVrBackdrop("VR Inspection Backdrop", new Vector2(1800f, 1250f),
-            Vector3.one * 0.0017f, new Color(1f, 1f, 1f, 0.98f), 238);
-        inspectionBackdropRoot.SetActive(false);
+        // White void is provided by the camera clear colour; no canvas backdrop needed.
     }
 
     private void EnsureMedkitBackdrop()
@@ -1502,31 +1589,31 @@ public class VRRestaurantInteraction : MonoBehaviour
         if (medkitBackdropRoot != null)
             return;
 
-        medkitBackdropRoot = BuildVrBackdrop("VR Medkit Backdrop", new Vector2(1800f, 1200f),
-            Vector3.one * 0.0017f, new Color(1f, 1f, 1f, 0.98f), 236);
-        medkitBackdropRoot.SetActive(false);
-    }
+        if (xrCamera == null)
+            return;
 
-    private GameObject BuildVrBackdrop(string name, Vector2 size, Vector3 scale, Color color, int sortingOrder)
-    {
-        GameObject root = new GameObject(name);
-        root.transform.SetParent(transform, false);
+        // Small title canvas parented to camera — no white background needed because
+        // the camera clear colour is already solid white in white-void mode.
+        medkitBackdropRoot = new GameObject("VR Medkit Title");
+        medkitBackdropRoot.transform.SetParent(xrCamera.transform, false);
+        medkitBackdropRoot.transform.localPosition = new Vector3(0f, 0.38f, 1.1f);
+        medkitBackdropRoot.transform.localRotation = Quaternion.identity;
 
-        Canvas canvas = root.AddComponent<Canvas>();
+        Canvas canvas = medkitBackdropRoot.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.WorldSpace;
-        canvas.sortingOrder = sortingOrder;
+        canvas.sortingOrder = 250;
         canvas.worldCamera = xrCamera;
 
-        RectTransform rect = root.GetComponent<RectTransform>();
-        rect.sizeDelta = size;
-        rect.localScale = scale;
+        RectTransform rect = medkitBackdropRoot.GetComponent<RectTransform>();
+        rect.sizeDelta = new Vector2(900f, 120f);
+        rect.localScale = Vector3.one * 0.0014f;
 
-        Image background = new GameObject("Background").AddComponent<Image>();
-        background.transform.SetParent(root.transform, false);
-        background.color = color;
-        StretchToParent(background.rectTransform);
+        TextMeshProUGUI title = MakeText(medkitBackdropRoot.transform, "MedkitTitle",
+            "Choose Medication", Vector2.zero, new Vector2(860f, 100f), 52f, true);
+        title.color = new Color(0.08f, 0.08f, 0.08f, 1f);
+        title.alignment = TextAlignmentOptions.Center;
 
-        return root;
+        medkitBackdropRoot.SetActive(false);
     }
 
     private static bool TryGetRendererBounds(GameObject root, out Bounds bounds)
@@ -1761,6 +1848,20 @@ public class VRRestaurantInteraction : MonoBehaviour
             rect.localScale = Vector3.one * 0.0015f;
             vrObjectiveText.rectTransform.sizeDelta = new Vector2(700f, 92f);
             vrObjectiveText.fontSize = 29f;
+        }
+    }
+
+    private void HideMedkitDesktopText()
+    {
+        if (medkitViewRoot == null)
+            return;
+
+        foreach (TMP_Text text in medkitViewRoot.GetComponentsInChildren<TMP_Text>(true))
+        {
+            if (text == null) continue;
+            string content = text.text ?? "";
+            if (content.IndexOf("choose", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                text.gameObject.SetActive(false);
         }
     }
 
