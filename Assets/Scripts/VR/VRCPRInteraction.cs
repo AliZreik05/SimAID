@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.XR;
 
 /// <summary>
 /// VR-only CPR objective.
@@ -39,10 +40,10 @@ public class VRCPRInteraction : MonoBehaviour
     [Header("Compression Detection")]
     [SerializeField] private int   requiredGoodCompressions = 15;
     [Tooltip("Minimum vertical depth (metres) for a stroke to count.")]
-    [SerializeField] private float compressionDepthMeters   = 0.05f;
-    [SerializeField] private float recoilToleranceMeters    = 0.015f;
+    [SerializeField] private float compressionDepthMeters   = 0.03f;
+    [SerializeField] private float recoilToleranceMeters    = 0.01f;
     [Tooltip("Minimum ratio of vertical vs lateral hand movement (0-1).")]
-    [SerializeField] private float verticalDominanceMin     = 0.60f;
+    [SerializeField] private float verticalDominanceMin     = 0.30f;
     [Tooltip("Seconds of hands-off before falling back to WaitingForHands.")]
     [SerializeField] private float resetIfHandsLostSeconds  = 0.8f;
 
@@ -73,7 +74,12 @@ public class VRCPRInteraction : MonoBehaviour
     private float   handsLostAt = -1f;
     private float snappedAxisOffset;
     private float snapEntryOffset; // baseline offset captured at CPR entry
-    private const float TargetBpm = 110f;
+    private const float TargetBpm = 80f;
+
+    // Trigger-squeeze compression
+    private float triggerCompressionValue; // 0 = released, 1 = fully squeezed
+    private const float TriggerDownThreshold = 0.6f;
+    private const float TriggerUpThreshold   = 0.2f;
 
     private int  goodCompressions;
     private bool notifiedStarted;
@@ -103,14 +109,13 @@ public class VRCPRInteraction : MonoBehaviour
     private TextMeshProUGUI countText;
     private TextMeshProUGUI bpmText;
     private TextMeshProUGUI hintText;
-    private RectTransform   depthIndicator;      // the moving white bar on depth chart
-    private Image           depthIndicatorImage; // its colour changes per quality
-    private RectTransform   bpmDot;              // the blue dot on the BPM bar
+    private RectTransform   depthIndicator;
+    private Image           depthIndicatorImage;
+    private RectTransform   bpmDot;
     private Image           bpmDotImage;
-    private RectTransform   rhythmTarget;        // oscillating target on depth bar
+    private RectTransform   rhythmTarget;
     private Image           rhythmTargetImage;
 
-    // Bar half-extents in Canvas units
     private const float DepthBarHalfH = 62f;
     private const float BpmBarHalfW   = 58f;
 
@@ -242,68 +247,43 @@ public class VRCPRInteraction : MonoBehaviour
     // =========================================================================
     private void TickCompressionDetection()
     {
-        float h    = GetAverageHandHeight();
-        Vector3 avg = GetAverageHandPos();
+        // Read trigger squeeze from both controllers.
+        float leftTrigger = 0f, rightTrigger = 0f;
+        InputDevice leftDev  = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
+        InputDevice rightDev = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+        leftDev.TryGetFeatureValue(CommonUsages.trigger,  out leftTrigger);
+        rightDev.TryGetFeatureValue(CommonUsages.trigger, out rightTrigger);
+        triggerCompressionValue = (leftTrigger + rightTrigger) * 0.5f;
+
+        // Use trigger value to drive the depth visual.
+        currentDepth = triggerCompressionValue * compressionDepthMeters;
+
+        bool isDown = triggerCompressionValue >= TriggerDownThreshold;
+        bool isUp   = triggerCompressionValue <= TriggerUpThreshold;
 
         switch (stroke)
         {
             case StrokeState.AtTop:
-                if (h > topHeight) topHeight = h;
-                if (topHeight - h > recoilToleranceMeters)
-                {
-                    stroke       = StrokeState.Down;
-                    bottomHeight = h;
-                    strokeStartPos = avg;
-                }
+                if (isDown) stroke = StrokeState.Down;
                 break;
 
             case StrokeState.Down:
-                if (h < bottomHeight) bottomHeight = h;
-                currentDepth = Mathf.Max(0f, topHeight - h);
-                if (h - bottomHeight > recoilToleranceMeters)
+                if (isUp)
                 {
-                    EvaluateStroke(avg);
-                    stroke = StrokeState.Up;
-                    currentDepth = 0f;
+                    // Full squeeze-and-release = one valid compression.
+                    compressionTimes.Enqueue(Time.time);
+                    while (compressionTimes.Count > BpmSamples) compressionTimes.Dequeue();
+                    UpdateBpm();
+                    goodCompressions++;
+                    stroke = StrokeState.AtTop;
+                    if (goodCompressions >= requiredGoodCompressions) Complete();
                 }
                 break;
 
             case StrokeState.Up:
-                if (h >= topHeight - recoilToleranceMeters)
-                {
-                    stroke    = StrokeState.AtTop;
-                    topHeight = h;
-                }
+                stroke = StrokeState.AtTop; // not used in trigger mode, resolve immediately
                 break;
         }
-    }
-
-    private void EvaluateStroke(Vector3 endPos)
-    {
-        float depth = topHeight - bottomHeight;
-        if (depth < compressionDepthMeters) return;
-
-        // Only count if the player's real hands are still over the chest.
-        // Without this, any vertical bob anywhere in the room would tick the
-        // counter once snapped in.
-        float distToChest = Vector3.Distance(endPos, GuideWorldPos);
-        if (distToChest > handPlacementRadius * 1.4f) return;
-
-        // Vertical-dominance check
-        Vector3 delta   = endPos - strokeStartPos;
-        float   vert    = Mathf.Abs(Vector3.Dot(delta, CompressionMovementAxis));
-        float   lateral = Vector3.ProjectOnPlane(delta, CompressionMovementAxis).magnitude;
-        float   total   = vert + lateral;
-        if (total > 0.0001f && vert / total < verticalDominanceMin) return;
-
-        compressionTimes.Enqueue(Time.time);
-        while (compressionTimes.Count > BpmSamples) compressionTimes.Dequeue();
-        UpdateBpm();
-
-        // BPM is shown for feedback only; depth + vertical-dominance already
-        // qualified this stroke as a real compression, so always count it.
-        goodCompressions++;
-        if (goodCompressions >= requiredGoodCompressions) Complete();
     }
 
     private void UpdateBpm()
@@ -397,8 +377,9 @@ public class VRCPRInteraction : MonoBehaviour
         handsLostAt    = -1f;
         goodCompressions = 0;
         notifiedStarted  = false;
-        snappedAxisOffset = 0f;
-        snapEntryOffset  = 0f;
+        snappedAxisOffset        = 0f;
+        snapEntryOffset          = 0f;
+        triggerCompressionValue  = 0f;
         RestoreHandVisuals();
         compressionTimes.Clear();
         currentBpm = 0f;
@@ -484,17 +465,15 @@ public class VRCPRInteraction : MonoBehaviour
         if (leftHand == null || rightHand == null || bottomGuideHand == null || topGuideHand == null)
             return;
 
-        Vector3 rawAverage = (leftHand.position + rightHand.position) * 0.5f;
-        float rawOffset    = Vector3.Dot(rawAverage - GuideWorldPos, CompressionMovementAxis);
-        // Subtract entry baseline so the visual hands appear exactly on the guide
-        // at snap-in and only deviate as the player moves vertically from there.
-        float relOffset    = rawOffset - snapEntryOffset;
-        snappedAxisOffset  = Mathf.Clamp(relOffset, -compressionDepthMeters * 2f, compressionDepthMeters);
+        // Hands hover 3 cm above the chest at rest (trigger=0) and reach the
+        // chest surface at full squeeze (trigger=1). They never clip through.
+        const float hoverHeight = 0.03f;
+        snappedAxisOffset = Mathf.Lerp(hoverHeight, 0f, triggerCompressionValue);
         Vector3 compressionOnlyOffset = CompressionMovementAxis * snappedAxisOffset;
 
-        Transform leftVisual = leftHandVisual != null ? leftHandVisual : leftHand;
+        Transform leftVisual  = leftHandVisual  != null ? leftHandVisual  : leftHand;
         Transform rightVisual = rightHandVisual != null ? rightHandVisual : rightHand;
-        leftVisual.SetPositionAndRotation(bottomGuideHand.position + compressionOnlyOffset, bottomGuideHand.rotation);
+        leftVisual.SetPositionAndRotation(bottomGuideHand.position  + compressionOnlyOffset, bottomGuideHand.rotation);
         rightVisual.SetPositionAndRotation(topGuideHand.position + compressionOnlyOffset, topGuideHand.rotation);
     }
 
@@ -598,8 +577,8 @@ public class VRCPRInteraction : MonoBehaviour
                 hintText.text = "Place both hands on the chest";
             else if (session == SessionState.ActiveCPR)
                 hintText.text = CurrentBeatPhase() > 0.5f
-                    ? "DOWN — press into chest"
-                    : "UP — release fully";
+                    ? "↓  Squeeze triggers"
+                    : "↑  Release triggers";
             else
                 hintText.text = "CPR objective complete!";
         }
@@ -608,13 +587,18 @@ public class VRCPRInteraction : MonoBehaviour
     // =========================================================================
     // UI visual updates (bars)
     // =========================================================================
+    // 0 = release (hands up), 1 = fully pressed down
+    private float CurrentBeatPhase()
+    {
+        float w = Mathf.Sin(Time.time * 2f * Mathf.PI * (TargetBpm / 60f));
+        return (w + 1f) * 0.5f;
+    }
+
     private void UpdateDepthVisual()
     {
         if (depthIndicator == null) return;
 
-        // Map currentDepth → bar position
-        // 0 = bottom (red zone), compressionDepthMeters = ~67% up (green zone)
-        float norm = currentDepth / (compressionDepthMeters * 1.5f); // 1.0 at 1.5× target
+        float norm = currentDepth / (compressionDepthMeters * 1.5f);
         float y    = Mathf.Lerp(-DepthBarHalfH, DepthBarHalfH, Mathf.Clamp01(norm));
         depthIndicator.anchoredPosition = new Vector2(0f, y);
 
@@ -622,19 +606,12 @@ public class VRCPRInteraction : MonoBehaviour
         {
             float depthNorm = currentDepth / compressionDepthMeters;
             Color c = depthNorm >= 0.75f
-                ? new Color(0.2f, 0.9f, 0.3f)   // green – good depth
+                ? new Color(0.2f, 0.9f, 0.3f)
                 : depthNorm >= 0.35f
-                    ? new Color(0.95f, 0.85f, 0.1f) // yellow – getting there
-                    : new Color(0.9f, 0.25f, 0.25f); // red – too shallow
+                    ? new Color(0.95f, 0.85f, 0.1f)
+                    : new Color(0.9f, 0.25f, 0.25f);
             depthIndicatorImage.color = c;
         }
-    }
-
-    // 0 = release (top of stroke, hands up), 1 = press (fully compressed)
-    private float CurrentBeatPhase()
-    {
-        float w = Mathf.Sin(Time.time * 2f * Mathf.PI * (TargetBpm / 60f));
-        return (w + 1f) * 0.5f;
     }
 
     private void UpdateRhythmTargetVisual()
@@ -650,7 +627,6 @@ public class VRCPRInteraction : MonoBehaviour
         if (rhythmTargetImage != null)
             rhythmTargetImage.color = new Color(0.15f, 0.55f, 1f, 0.95f);
 
-        // Bottom of bar (norm 0) = release; ~0.85 = green compress zone
         float beat = CurrentBeatPhase();
         float norm = Mathf.Lerp(0f, 0.85f, beat);
         float y    = Mathf.Lerp(-DepthBarHalfH, DepthBarHalfH, norm);
@@ -679,12 +655,10 @@ public class VRCPRInteraction : MonoBehaviour
     // =========================================================================
     private void CreateFeedbackCanvas()
     {
-        // Scene-level root – NOT parented to CPR_Target (avoids its non-uniform scale)
         feedbackRoot          = new GameObject("VR CPR Feedback Root").transform;
         feedbackRoot.position = transform.position + Vector3.up * 0.45f;
         feedbackRoot.rotation = Quaternion.identity;
 
-        // World-space Canvas
         GameObject canvasGO = new GameObject("VR CPR Canvas");
         canvasGO.transform.SetParent(feedbackRoot, false);
 
@@ -693,7 +667,7 @@ public class VRCPRInteraction : MonoBehaviour
 
         RectTransform cr = canvasGO.GetComponent<RectTransform>();
         cr.sizeDelta    = new Vector2(420f, 260f);
-        cr.localScale   = Vector3.one * 0.001f; // 420 × 0.001 = 0.42 m wide
+        cr.localScale   = Vector3.one * 0.001f;
         cr.localPosition = Vector3.zero;
         cr.localRotation = Quaternion.identity;
 
@@ -728,28 +702,25 @@ public class VRCPRInteraction : MonoBehaviour
             color: new Color(0.95f, 0.95f, 0.95f));
     }
 
-    // ── Depth bar: vertical coloured segments + moving indicator ──────────────
+    // ── Depth bar: vertical coloured segments + moving indicator + rhythm target ─
     private void BuildDepthBar(RectTransform parent)
     {
-        // Dark background container
         RectTransform bg = MakeImage(parent, "DepthBG",
             pos: new Vector2(-65f, 12f), size: new Vector2(36f, 138f),
             color: new Color(0.12f, 0.12f, 0.12f));
 
-        // Stacked colour segments from bottom (red=shallow) to top (red=too deep)
-        // Heights must sum to ≈ 138
         (Color col, float h)[] segs =
         {
-            (new Color(0.85f, 0.15f, 0.15f), 18f), // bottom red
-            (new Color(1.00f, 0.50f, 0.00f), 18f), // orange
-            (new Color(0.95f, 0.88f, 0.10f), 22f), // yellow
-            (new Color(0.20f, 0.85f, 0.25f), 32f), // GREEN – target zone
-            (new Color(0.95f, 0.88f, 0.10f), 20f), // yellow
-            (new Color(1.00f, 0.50f, 0.00f), 16f), // orange
-            (new Color(0.85f, 0.15f, 0.15f), 12f), // top red
+            (new Color(0.85f, 0.15f, 0.15f), 18f),
+            (new Color(1.00f, 0.50f, 0.00f), 18f),
+            (new Color(0.95f, 0.88f, 0.10f), 22f),
+            (new Color(0.20f, 0.85f, 0.25f), 32f),
+            (new Color(0.95f, 0.88f, 0.10f), 20f),
+            (new Color(1.00f, 0.50f, 0.00f), 16f),
+            (new Color(0.85f, 0.15f, 0.15f), 12f),
         };
 
-        float y = -69f; // start at bottom of 138-tall rect
+        float y = -69f;
         foreach (var (col, h) in segs)
         {
             MakeImage(bg, "Seg", pos: new Vector2(0f, y + h * 0.5f),
@@ -757,7 +728,7 @@ public class VRCPRInteraction : MonoBehaviour
             y += h;
         }
 
-        // White indicator line that moves up/down
+        // White bar — your current depth
         RectTransform ind = MakeImage(bg, "DepthIndicator",
             pos: new Vector2(0f, -DepthBarHalfH),
             size: new Vector2(48f, 6f),
@@ -765,8 +736,7 @@ public class VRCPRInteraction : MonoBehaviour
         depthIndicator      = ind;
         depthIndicatorImage = ind.GetComponent<Image>();
 
-        // Blue rhythm target — oscillates between bottom (release) and the
-        // green compress zone at TargetBpm. Player matches the white bar to it.
+        // Blue bar — rhythm target to follow
         RectTransform tgt = MakeImage(bg, "RhythmTarget",
             pos: new Vector2(0f, -DepthBarHalfH),
             size: new Vector2(60f, 4f),
@@ -784,13 +754,13 @@ public class VRCPRInteraction : MonoBehaviour
 
         Color[] cols =
         {
-            new Color(0.85f, 0.15f, 0.15f), // red  (too slow)
-            new Color(1.00f, 0.50f, 0.00f), // orange
-            new Color(0.95f, 0.88f, 0.10f), // yellow
-            new Color(0.20f, 0.85f, 0.25f), // green (ideal)
-            new Color(0.95f, 0.88f, 0.10f), // yellow
-            new Color(1.00f, 0.50f, 0.00f), // orange
-            new Color(0.85f, 0.15f, 0.15f), // red  (too fast)
+            new Color(0.85f, 0.15f, 0.15f),
+            new Color(1.00f, 0.50f, 0.00f),
+            new Color(0.95f, 0.88f, 0.10f),
+            new Color(0.20f, 0.85f, 0.25f),
+            new Color(0.95f, 0.88f, 0.10f),
+            new Color(1.00f, 0.50f, 0.00f),
+            new Color(0.85f, 0.15f, 0.15f),
         };
 
         float segW = 148f / cols.Length;
@@ -802,13 +772,12 @@ public class VRCPRInteraction : MonoBehaviour
                 color: cols[i]);
         }
 
-        // Sliding blue dot indicator
         RectTransform dot = MakeImage(bg, "BpmDot",
             pos: Vector2.zero, size: new Vector2(14f, 36f),
             color: new Color(0.2f, 0.45f, 1f));
         bpmDot      = dot;
         bpmDotImage = dot.GetComponent<Image>();
-        if (bpmDotImage != null) bpmDotImage.color = Color.clear; // hidden until first BPM
+        if (bpmDotImage != null) bpmDotImage.color = Color.clear;
     }
 
     // ── UGUI helpers ──────────────────────────────────────────────────────────
