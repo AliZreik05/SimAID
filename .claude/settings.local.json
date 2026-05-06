@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -B1 -A1 -E \"Direct Interactor|VR Player|Right Hand$|Left Hand$|XR Origin\")",
+      "Bash(grep -nE \"ChestInspectionRoot|HandRotationRoot|ChestInspect$|HandInspect$|ChestInspect[^i]|HandInspect[^i]\" \"C:/Users/User/Desktop/cmps/fyp/SimAID/Assets/Scenes/Restaurant Scene.unity\")",
+      "Bash(awk 'NR>=1378171820 && NR<=1378171900')"
+    ]
+  }
+}

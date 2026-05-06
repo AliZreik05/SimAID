@@ -14,8 +14,10 @@ public class VRControllerUIPointer : MonoBehaviour
 
     private readonly List<Button> activeButtons = new List<Button>();
     private bool wasTriggerPressed;
+    private bool suppressSubmitUntilTriggerReleased;
     private float lastNavigateTime;
     private int selectedIndex;
+    private int lastButtonSignature;
     private string lastSceneName;
 
     public void SetCamera(Camera camera)
@@ -84,6 +86,15 @@ public class VRControllerUIPointer : MonoBehaviour
     private void HandleTriggerSubmit()
     {
         bool triggerPressed = IsTriggerPressed();
+        if (suppressSubmitUntilTriggerReleased)
+        {
+            if (!triggerPressed)
+                suppressSubmitUntilTriggerReleased = false;
+
+            wasTriggerPressed = triggerPressed;
+            return;
+        }
+
         if (triggerPressed && !wasTriggerPressed)
         {
             Button selectedButton = GetIndexedButton();
@@ -115,6 +126,29 @@ public class VRControllerUIPointer : MonoBehaviour
 
         activeButtons.Sort(CompareButtonsForMenuNavigation);
         selectedIndex = Mathf.Clamp(selectedIndex, 0, Mathf.Max(0, activeButtons.Count - 1));
+
+        int signature = CalculateButtonSignature();
+        if (signature != lastButtonSignature)
+        {
+            lastButtonSignature = signature;
+            if (IsTriggerPressed())
+                suppressSubmitUntilTriggerReleased = true;
+        }
+    }
+
+    private int CalculateButtonSignature()
+    {
+        unchecked
+        {
+            int signature = activeButtons.Count;
+            foreach (Button button in activeButtons)
+            {
+                if (button != null)
+                    signature = signature * 31 + button.GetInstanceID();
+            }
+
+            return signature;
+        }
     }
 
     private static int CompareButtonsForMenuNavigation(Button a, Button b)
