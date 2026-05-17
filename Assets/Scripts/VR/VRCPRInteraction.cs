@@ -1,262 +1,1029 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.XR;
 
+/// <summary>
+/// VR-only CPR objective.
+/// – Shows a green two-hand placeholder on the patient's chest.
+/// – When both XR hands are near the placeholder, enters CPR mode.
+/// – Tracks vertical compressions; validates depth + vertical dominance + BPM.
+/// – Displays a floating Canvas HUD (two white panels) matching the CPR-simulator
+///   reference: compression count, BPM number, depth bar (vertical, coloured
+///   segments + moving indicator), and BPM rate bar (horizontal, rainbow + dot).
+/// – After 15 good compressions notifies ScenarioGameLoop.NotifyCPRDone().
+/// – Desktop CPR (CPRMinigame / CPR.cs) is completely untouched.
+/// </summary>
 public class VRCPRInteraction : MonoBehaviour
 {
-    private enum CompressionState
-    {
-        WaitingForHands,
-        ReadyAtTop,
-        Downstroke,
-        WaitingForRecoil,
-        Complete
-    }
+    // -------------------------------------------------------------------------
+    // Enums
+    // -------------------------------------------------------------------------
+    private enum SessionState { WaitingForHands, ActiveCPR, Complete }
+    private enum StrokeState  { AtTop, Down, Up }
+    private enum BpmQuality   { Idle, Good, Acceptable, Bad }
 
+    // -------------------------------------------------------------------------
+    // Inspector
+    // -------------------------------------------------------------------------
     [Header("Hand Tracking")]
     [SerializeField] private Transform leftHand;
     [SerializeField] private Transform rightHand;
-    [SerializeField] private float handPlacementTolerance = 0.18f;
-    [SerializeField] private float maxHandSeparation = 0.42f;
+    [SerializeField] private Transform leftHandVisual;
+    [SerializeField] private Transform rightHandVisual;
+    [Tooltip("Point the hands must be near to enter CPR mode. Defaults to this transform.")]
+    [SerializeField] private Transform compressionAnchor;
+    [SerializeField] private float handPlacementRadius = 0.28f;
+    [SerializeField] private float maxHandSeparation   = 0.48f;
 
-    [Header("Compression")]
-    [SerializeField] private int requiredGoodCompressions = 15;
-    [SerializeField] private float compressionDepthMeters = 0.05f;
-    [SerializeField] private float fullRecoilToleranceMeters = 0.014f;
-    [SerializeField] private float minimumDownVelocity = 0.12f;
-    [SerializeField] private float resetIfHandsLostSeconds = 0.7f;
+    [Header("Compression Detection")]
+    [SerializeField] private int   requiredGoodCompressions = 15;
+    [Tooltip("Minimum vertical depth (metres) for a stroke to count.")]
+    [SerializeField] private float compressionDepthMeters   = 0.03f;
+    [SerializeField] private float recoilToleranceMeters    = 0.01f;
+    [Tooltip("Minimum ratio of vertical vs lateral hand movement (0-1).")]
+    [SerializeField] private float verticalDominanceMin     = 0.30f;
+    [Tooltip("Seconds of hands-off before falling back to WaitingForHands.")]
+    [SerializeField] private float resetIfHandsLostSeconds  = 0.8f;
 
-    [Header("Feedback")]
-    [SerializeField] private TextMeshPro feedbackText;
-    [SerializeField] private bool createWorldFeedback = true;
+    [Header("BPM Thresholds")]
+    [SerializeField] private float idealBpmLow      = 100f;
+    [SerializeField] private float idealBpmHigh     = 120f;
+    [SerializeField] private float acceptableBpmLow  = 80f;
+    [SerializeField] private float acceptableBpmHigh = 140f;
 
+    [Header("Auto-Build")]
+    [SerializeField] private bool buildFeedbackUI      = true;
+    [SerializeField] private bool buildHandPlaceholder = true;
+
+    [Header("Optional Inspector Overrides")]
+    [SerializeField] private GameObject handPlaceholder;
+    [SerializeField] private GameObject snappedHandsVisual;
+
+    // -------------------------------------------------------------------------
+    // Private state
+    // -------------------------------------------------------------------------
     private ScenarioGameLoop loop;
-    private Collider chestCollider;
-    private CompressionState state = CompressionState.WaitingForHands;
 
-    private float topHandHeight;
-    private float previousHandHeight;
-    private float deepestDepth;
-    private float handsLostAt = -1f;
-    private int goodCompressions;
+    private SessionState session = SessionState.WaitingForHands;
+    private StrokeState  stroke  = StrokeState.AtTop;
+
+    private float topHeight, bottomHeight, currentDepth;
+    private Vector3 strokeStartPos;
+    private float   handsLostAt = -1f;
+    private float snappedAxisOffset;
+    private float snapEntryOffset; // baseline offset captured at CPR entry
+    private const float TargetBpm = 80f;
+
+    // Trigger-squeeze compression
+    private float triggerCompressionValue; // 0 = released, 1 = fully squeezed
+    private const float TriggerDownThreshold = 0.6f;
+    private const float TriggerUpThreshold   = 0.2f;
+
+    private int  goodCompressions;
     private bool notifiedStarted;
 
-    private Vector3 CompressionAxis => transform.up.normalized;
+    private const int BpmSamples = 4;
+    private readonly Queue<float> compressionTimes = new Queue<float>(BpmSamples + 1);
+    private float currentBpm;
 
+    // -------------------------------------------------------------------------
+    // Auto-built scene objects
+    // -------------------------------------------------------------------------
+    private Transform feedbackRoot;    // follows CPR_Target, holds Canvas
+    private Transform placeholderRoot; // follows CPR_Target, holds hand shapes
+    private Transform bottomGuideHand;
+    private Transform topGuideHand;
+    private Transform patientHeadBone;
+    private Transform patientHipsBone;
+    private Transform leftVisualOriginalParent;
+    private Transform rightVisualOriginalParent;
+    private Vector3 leftVisualOriginalLocalPosition;
+    private Vector3 rightVisualOriginalLocalPosition;
+    private Quaternion leftVisualOriginalLocalRotation;
+    private Quaternion rightVisualOriginalLocalRotation;
+    private bool visualPoseCached;
+
+    // UI runtime references
+    private TextMeshProUGUI countText;
+    private TextMeshProUGUI bpmText;
+    private TextMeshProUGUI hintText;
+    private RectTransform   depthIndicator;
+    private Image           depthIndicatorImage;
+    private RectTransform   bpmDot;
+    private Image           bpmDotImage;
+    private RectTransform   rhythmTarget;
+    private Image           rhythmTargetImage;
+
+    private const float DepthBarHalfH = 62f;
+    private const float BpmBarHalfW   = 58f;
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+    private Vector3 CompressionAxis => transform.up.normalized;
+    private Vector3 CompressionMovementAxis => transform.forward.normalized;
+    private Vector3 AnchorPos       => compressionAnchor != null
+                                        ? compressionAnchor.position
+                                        : transform.position;
+    private Vector3 GuideAnchorPos  => GetGuideAnchorPosition();
+    private Vector3 GuideWorldPos   => GuideAnchorPos + CompressionAxis * 0.04f + transform.forward * 0.035f;
+
+    // =========================================================================
+    // Unity lifecycle
+    // =========================================================================
     private void Awake()
     {
         loop = FindFirstObjectByType<ScenarioGameLoop>();
-        chestCollider = GetComponent<Collider>();
+        if (compressionAnchor == null) compressionAnchor = transform;
+        CachePatientBodyBones();
 
-        if (createWorldFeedback && feedbackText == null)
-            feedbackText = CreateFeedbackText();
+        if (buildFeedbackUI)      CreateFeedbackCanvas();
+        if (buildHandPlaceholder && handPlaceholder == null) CreatePlaceholder();
     }
 
     private void OnEnable()
     {
         ResetSession();
+        ShowPlaceholder(true);
+        ShowSnappedHands(false);
+        RefreshUI();
+        Application.onBeforeRender += OnBeforeRenderApplyPose;
+    }
+
+    private void OnDisable()
+    {
+        Application.onBeforeRender -= OnBeforeRenderApplyPose;
+        RestoreHandVisuals();
+        ShowSnappedHands(false);
+    }
+
+    // Runs AFTER XR Hands / XR Interaction Toolkit have written controller-driven
+    // poses for the frame, so our snapped CPR pose wins and the visuals do not
+    // fight the rig (which previously caused the vibrating-in-place behaviour).
+    private void OnBeforeRenderApplyPose()
+    {
+        if (session == SessionState.ActiveCPR)
+            ApplySnappedHandPose();
+    }
+
+    private void OnDestroy()
+    {
+        if (feedbackRoot    != null) Destroy(feedbackRoot.gameObject);
+        if (placeholderRoot != null) Destroy(placeholderRoot.gameObject);
+    }
+
+    private void LateUpdate()
+    {
+        // Keep Canvas near the CPR target so it is readable while compressing.
+        if (feedbackRoot != null)
+        {
+            Vector3 uiPos = GuideWorldPos + CompressionAxis * 0.24f + transform.forward * 0.18f;
+            feedbackRoot.position = uiPos;
+
+            Camera cam = Camera.main;
+            if (cam != null)
+            {
+                // Panel must face the camera: +Z away from camera so the front (-Z) faces toward it
+                Vector3 toCam = cam.transform.position - uiPos;
+                Vector3 flat  = new Vector3(toCam.x, 0f, toCam.z);
+                if (flat.sqrMagnitude > 0.01f)
+                    feedbackRoot.rotation = Quaternion.LookRotation(-flat.normalized);
+            }
+        }
+
+        // Keep placeholder at chest surface
+        if (placeholderRoot != null)
+        {
+            placeholderRoot.position = GuideWorldPos;
+            placeholderRoot.rotation = Quaternion.LookRotation(transform.forward, CompressionAxis);
+        }
+
+        if (session == SessionState.ActiveCPR)
+            ApplySnappedHandPose();
     }
 
     private void Update()
     {
-        if (state == CompressionState.Complete)
-            return;
+        if (session == SessionState.Complete) return;
 
         TryResolveHands();
 
-        if (leftHand == null || rightHand == null || chestCollider == null)
+        // Depth smoothly returns to 0 when not in down-stroke
+        if (stroke != StrokeState.Down)
+            currentDepth = Mathf.Lerp(currentDepth, 0f, Time.deltaTime * 10f);
+
+        if (leftHand == null || rightHand == null)
         {
-            SetFeedback("VR CPR: place both hands on the patient's chest.");
+            RefreshUI();
+            UpdateDepthVisual();
             return;
         }
 
-        bool handsPlaced = AreHandsPlacedCorrectly();
-        if (!handsPlaced)
+        bool placed = AreHandsPlacedCorrectly();
+
+        if (session == SessionState.WaitingForHands)
         {
-            HandleHandsLost();
+            if (placed) EnterCprMode();
+            RefreshUI();
+            UpdateDepthVisual();
             return;
         }
 
-        handsLostAt = -1f;
+        // session == ActiveCPR. Once snapped in, do not exit CPR just because
+        // tracked hands drift laterally; the visual hands are constrained below.
+        TickCompressionDetection();
+        UpdateBpm();
 
-        float handHeight = GetAverageHandHeight();
-        float velocity = (handHeight - previousHandHeight) / Mathf.Max(Time.deltaTime, 0.0001f);
-        previousHandHeight = handHeight;
+        RefreshUI();
+        UpdateDepthVisual();
+        UpdateBpmDotVisual();
+        UpdateRhythmTargetVisual();
+    }
 
-        if (state == CompressionState.WaitingForHands)
+    // =========================================================================
+    // Compression detection
+    // =========================================================================
+    private void TickCompressionDetection()
+    {
+        // Read trigger squeeze from both controllers.
+        float leftTrigger = 0f, rightTrigger = 0f;
+        InputDevice leftDev  = InputDevices.GetDeviceAtXRNode(XRNode.LeftHand);
+        InputDevice rightDev = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
+        leftDev.TryGetFeatureValue(CommonUsages.trigger,  out leftTrigger);
+        rightDev.TryGetFeatureValue(CommonUsages.trigger, out rightTrigger);
+        triggerCompressionValue = (leftTrigger + rightTrigger) * 0.5f;
+
+        // Use trigger value to drive the depth visual.
+        currentDepth = triggerCompressionValue * compressionDepthMeters;
+
+        bool isDown = triggerCompressionValue >= TriggerDownThreshold;
+        bool isUp   = triggerCompressionValue <= TriggerUpThreshold;
+
+        switch (stroke)
         {
-            topHandHeight = handHeight;
-            deepestDepth = 0f;
-            state = CompressionState.ReadyAtTop;
-            SetFeedback($"Both hands on chest. Compress down and fully release.\nGood compressions: {goodCompressions}/{requiredGoodCompressions}");
-            NotifyStarted();
-            return;
-        }
+            case StrokeState.AtTop:
+                if (isDown) stroke = StrokeState.Down;
+                break;
 
-        if (state == CompressionState.ReadyAtTop)
-        {
-            topHandHeight = Mathf.Max(topHandHeight, handHeight);
-        }
-
-        float depth = Mathf.Max(0f, topHandHeight - handHeight);
-        deepestDepth = Mathf.Max(deepestDepth, depth);
-
-        switch (state)
-        {
-            case CompressionState.ReadyAtTop:
-                bool movingDown = velocity < -minimumDownVelocity || depth >= compressionDepthMeters * 0.35f;
-                if (depth > fullRecoilToleranceMeters && movingDown)
+            case StrokeState.Down:
+                if (isUp)
                 {
-                    state = CompressionState.Downstroke;
-                    SetFeedback($"Compressing...\nDepth: {depth * 100f:0} cm");
+                    // Full squeeze-and-release = one valid compression.
+                    compressionTimes.Enqueue(Time.time);
+                    while (compressionTimes.Count > BpmSamples) compressionTimes.Dequeue();
+                    UpdateBpm();
+                    goodCompressions++;
+                    stroke = StrokeState.AtTop;
+                    if (goodCompressions >= requiredGoodCompressions) Complete();
                 }
                 break;
 
-            case CompressionState.Downstroke:
-                SetFeedback($"Compressing...\nDepth: {depth * 100f:0} cm");
-                if (depth >= compressionDepthMeters)
-                    state = CompressionState.WaitingForRecoil;
-                break;
-
-            case CompressionState.WaitingForRecoil:
-                if (depth <= fullRecoilToleranceMeters)
-                {
-                    RegisterCompression();
-                    state = CompressionState.ReadyAtTop;
-                    topHandHeight = handHeight;
-                    deepestDepth = 0f;
-                }
-                else
-                {
-                    SetFeedback($"Release fully before the next compression.\nDepth: {depth * 100f:0} cm");
-                }
+            case StrokeState.Up:
+                stroke = StrokeState.AtTop; // not used in trigger mode, resolve immediately
                 break;
         }
     }
 
-    private void RegisterCompression()
+    private void UpdateBpm()
     {
-        if (deepestDepth < compressionDepthMeters)
+        if (compressionTimes.Count < 2) { currentBpm = 0f; return; }
+
+        float earliest = float.MaxValue, latest = float.MinValue;
+        foreach (float t in compressionTimes)
         {
-            SetFeedback("Too shallow. Push about 5 cm and let the chest recoil.");
-            return;
+            if (t < earliest) earliest = t;
+            if (t > latest)   latest   = t;
         }
-
-        goodCompressions++;
-        SetFeedback($"Good compression.\nGood compressions: {goodCompressions}/{requiredGoodCompressions}");
-
-        if (goodCompressions >= requiredGoodCompressions)
-            Complete();
+        float span = latest - earliest;
+        if (span < 0.0001f) { currentBpm = 0f; return; }
+        currentBpm = 60f / (span / (compressionTimes.Count - 1));
     }
 
-    private void Complete()
+    private BpmQuality ClassifyBpm(float bpm)
     {
-        state = CompressionState.Complete;
-        SetFeedback("CPR objective complete.");
-
-        if (loop != null)
-            loop.NotifyCPRDone();
-
-        CPR desktopInteractable = GetComponent<CPR>();
-        if (desktopInteractable != null)
-            desktopInteractable.enabled = false;
+        if (bpm <= 0f)                                         return BpmQuality.Idle;
+        if (bpm >= idealBpmLow     && bpm <= idealBpmHigh)    return BpmQuality.Good;
+        if (bpm >= acceptableBpmLow && bpm <= acceptableBpmHigh) return BpmQuality.Acceptable;
+        return BpmQuality.Bad;
     }
 
-    private void NotifyStarted()
+    // =========================================================================
+    // State transitions
+    // =========================================================================
+    private void EnterCprMode()
     {
-        if (notifiedStarted)
-            return;
+        session        = SessionState.ActiveCPR;
+        stroke         = StrokeState.AtTop;
+        topHeight      = GetAverageHandHeight();
+        bottomHeight   = topHeight;
+        strokeStartPos = GetAverageHandPos();
+        handsLostAt    = -1f;
+        currentDepth   = 0f;
+        snappedAxisOffset = 0f;
 
-        notifiedStarted = true;
+        // Baseline so the visual hands sit exactly on the guide at snap-in,
+        // regardless of where the player was holding their controllers.
+        Vector3 entryAvg = (leftHand.position + rightHand.position) * 0.5f;
+        snapEntryOffset  = Vector3.Dot(entryAvg - GuideWorldPos, CompressionMovementAxis);
 
-        if (loop != null)
-            loop.NotifyCPRStarted();
+        CacheHandVisuals();
+        ShowPlaceholder(false);
+        ShowSnappedHands(true);
+        ApplySnappedHandPose();
+        NotifyStarted();
     }
 
     private void HandleHandsLost()
     {
-        if (handsLostAt < 0f)
-            handsLostAt = Time.time;
+        if (handsLostAt < 0f) handsLostAt = Time.time;
+        if (Time.time - handsLostAt < resetIfHandsLostSeconds) return;
 
-        if (Time.time - handsLostAt >= resetIfHandsLostSeconds)
-        {
-            state = CompressionState.WaitingForHands;
-            deepestDepth = 0f;
-            SetFeedback($"Use both hands together over the chest.\nGood compressions: {goodCompressions}/{requiredGoodCompressions}");
-        }
+        session      = SessionState.WaitingForHands;
+        stroke       = StrokeState.AtTop;
+        currentDepth = 0f;
+        ShowPlaceholder(true);
+        ShowSnappedHands(false);
     }
 
-    private bool AreHandsPlacedCorrectly()
+    private void Complete()
     {
-        if (Vector3.Distance(leftHand.position, rightHand.position) > maxHandSeparation)
-            return false;
+        session = SessionState.Complete;
+        ShowPlaceholder(false);
+        RestoreHandVisuals();
+        ShowSnappedHands(false);
 
-        return IsHandOverChest(leftHand.position) && IsHandOverChest(rightHand.position);
+        if (loop != null) loop.NotifyCPRDone();
+
+        RefreshUI();
+        UpdateDepthVisual();
+        UpdateBpmDotVisual();
+        enabled = false; // stop Update/LateUpdate; OnDestroy cleans up roots
     }
 
-    private bool IsHandOverChest(Vector3 handPosition)
+    private void NotifyStarted()
     {
-        Vector3 closest = chestCollider.ClosestPoint(handPosition);
-        return Vector3.Distance(closest, handPosition) <= handPlacementTolerance;
-    }
-
-    private float GetAverageHandHeight()
-    {
-        Vector3 average = (leftHand.position + rightHand.position) * 0.5f;
-        return Vector3.Dot(average, CompressionAxis);
+        if (notifiedStarted || loop == null) return;
+        notifiedStarted = true;
+        loop.NotifyCPRStarted();
     }
 
     private void ResetSession()
     {
-        state = CompressionState.WaitingForHands;
-        topHandHeight = 0f;
-        previousHandHeight = 0f;
-        deepestDepth = 0f;
-        handsLostAt = -1f;
+        session = SessionState.WaitingForHands;
+        stroke  = StrokeState.AtTop;
+        topHeight = bottomHeight = currentDepth = 0f;
+        handsLostAt    = -1f;
         goodCompressions = 0;
-        notifiedStarted = false;
+        notifiedStarted  = false;
+        snappedAxisOffset        = 0f;
+        snapEntryOffset          = 0f;
+        triggerCompressionValue  = 0f;
+        RestoreHandVisuals();
+        compressionTimes.Clear();
+        currentBpm = 0f;
     }
+
+    // =========================================================================
+    // Hand utilities
+    // =========================================================================
+    private bool AreHandsPlacedCorrectly()
+    {
+        if (Vector3.Distance(leftHand.position, rightHand.position) > maxHandSeparation)
+            return false;
+        Vector3 anchor = GuideWorldPos;
+        return Vector3.Distance(leftHand.position,  anchor) <= handPlacementRadius
+            && Vector3.Distance(rightHand.position, anchor) <= handPlacementRadius;
+    }
+
+    private float   GetAverageHandHeight() =>
+        Vector3.Dot((leftHand.position + rightHand.position) * 0.5f, CompressionMovementAxis);
+
+    private Vector3 GetAverageHandPos() =>
+        (leftHand.position + rightHand.position) * 0.5f;
 
     private void TryResolveHands()
     {
-        if (leftHand == null)
-            leftHand = FindHandTransform("Left Hand", "Left Direct Interactor", "XR Controller Left");
-
-        if (rightHand == null)
-            rightHand = FindHandTransform("Right Hand", "Right Direct Interactor", "XR Controller Right");
+        if (leftHand  == null) leftHand  = FindHand("Left Hand",  "LeftHand",  "Left Direct Interactor");
+        if (rightHand == null) rightHand = FindHand("Right Hand", "RightHand", "Right Direct Interactor");
+        if (leftHandVisual == null) leftHandVisual = FindSceneHandVisual("Left Hand Model");
+        if (rightHandVisual == null) rightHandVisual = FindSceneHandVisual("Right Hand Model");
     }
 
-    private static Transform FindHandTransform(params string[] names)
+    private static Transform FindHand(params string[] names)
     {
-        foreach (string name in names)
+        foreach (string n in names)
         {
-            GameObject go = GameObject.Find(name);
-            if (go != null)
-                return go.transform;
+            GameObject go = GameObject.Find(n);
+            if (go != null) return go.transform;
+        }
+        return null;
+    }
+
+    private static Transform FindSceneHandVisual(string exactName)
+    {
+        Transform[] transforms = FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform t = transforms[i];
+            if (t == null || t.name != exactName || IsUnderCprGuide(t))
+                continue;
+
+            return t;
         }
 
         return null;
     }
 
-    private TextMeshPro CreateFeedbackText()
+    private static bool IsUnderCprGuide(Transform t)
     {
-        GameObject textObject = new GameObject("VR CPR Feedback");
-        textObject.transform.SetParent(transform, false);
-        textObject.transform.localPosition = new Vector3(0f, 0.42f, 0.05f);
-        textObject.transform.localRotation = Quaternion.Euler(65f, 0f, 0f);
-        textObject.transform.localScale = Vector3.one * 0.035f;
+        while (t != null)
+        {
+            if (t.name.Contains("CPR"))
+                return true;
+            t = t.parent;
+        }
 
-        TextMeshPro text = textObject.AddComponent<TextMeshPro>();
-        text.alignment = TextAlignmentOptions.Center;
-        text.fontSize = 2.6f;
-        text.color = Color.white;
-        text.enableWordWrapping = true;
-        text.rectTransform.sizeDelta = new Vector2(8f, 3f);
-        return text;
+        return false;
     }
 
-    private void SetFeedback(string message)
+    private void ShowPlaceholder(bool show)
     {
-        if (feedbackText != null)
-            feedbackText.text = message;
+        if (handPlaceholder  != null && handPlaceholder.activeSelf  != show) handPlaceholder.SetActive(show);
+        if (placeholderRoot  != null && placeholderRoot.gameObject.activeSelf != show) placeholderRoot.gameObject.SetActive(show);
+    }
+
+    private void ShowSnappedHands(bool show)
+    {
+        if (snappedHandsVisual != null && snappedHandsVisual.activeSelf != show)
+            snappedHandsVisual.SetActive(show);
+    }
+
+    private void ApplySnappedHandPose()
+    {
+        if (leftHand == null || rightHand == null || bottomGuideHand == null || topGuideHand == null)
+            return;
+
+        // Hands hover 3 cm above the chest at rest (trigger=0) and reach the
+        // chest surface at full squeeze (trigger=1). They never clip through.
+        const float hoverHeight = 0.03f;
+        snappedAxisOffset = Mathf.Lerp(hoverHeight, 0f, triggerCompressionValue);
+        Vector3 compressionOnlyOffset = CompressionMovementAxis * snappedAxisOffset;
+
+        Transform leftVisual  = leftHandVisual  != null ? leftHandVisual  : leftHand;
+        Transform rightVisual = rightHandVisual != null ? rightHandVisual : rightHand;
+        leftVisual.SetPositionAndRotation(bottomGuideHand.position  + compressionOnlyOffset, bottomGuideHand.rotation);
+        rightVisual.SetPositionAndRotation(topGuideHand.position + compressionOnlyOffset, topGuideHand.rotation);
+    }
+
+    private void CacheHandVisuals()
+    {
+        if (visualPoseCached)
+            return;
+
+        if (leftHandVisual != null)
+        {
+            leftVisualOriginalParent = leftHandVisual.parent;
+            leftVisualOriginalLocalPosition = leftHandVisual.localPosition;
+            leftVisualOriginalLocalRotation = leftHandVisual.localRotation;
+        }
+
+        if (rightHandVisual != null)
+        {
+            rightVisualOriginalParent = rightHandVisual.parent;
+            rightVisualOriginalLocalPosition = rightHandVisual.localPosition;
+            rightVisualOriginalLocalRotation = rightHandVisual.localRotation;
+        }
+
+        visualPoseCached = true;
+    }
+
+    private void RestoreHandVisuals()
+    {
+        if (!visualPoseCached)
+            return;
+
+        if (leftHandVisual != null && leftHandVisual.parent == leftVisualOriginalParent)
+        {
+            leftHandVisual.localPosition = leftVisualOriginalLocalPosition;
+            leftHandVisual.localRotation = leftVisualOriginalLocalRotation;
+        }
+
+        if (rightHandVisual != null && rightHandVisual.parent == rightVisualOriginalParent)
+        {
+            rightHandVisual.localPosition = rightVisualOriginalLocalPosition;
+            rightHandVisual.localRotation = rightVisualOriginalLocalRotation;
+        }
+
+        visualPoseCached = false;
+    }
+
+    private void CachePatientBodyBones()
+    {
+        Animator animator = GetComponentInParent<Animator>();
+        if (animator == null || !animator.isHuman)
+            return;
+
+        patientHeadBone = animator.GetBoneTransform(HumanBodyBones.Head);
+        patientHipsBone = animator.GetBoneTransform(HumanBodyBones.Hips);
+    }
+
+    private Vector3 GetGuideAnchorPosition()
+    {
+        Vector3 bodyAxis = Vector3.zero;
+
+        if (patientHeadBone != null && patientHipsBone != null)
+        {
+            bodyAxis = Vector3.ProjectOnPlane(patientHipsBone.position - patientHeadBone.position, CompressionAxis);
+        }
+
+        if (bodyAxis.sqrMagnitude < 0.0001f)
+        {
+            bodyAxis = Vector3.ProjectOnPlane(transform.forward, CompressionAxis);
+        }
+
+        if (bodyAxis.sqrMagnitude < 0.0001f)
+            return AnchorPos;
+
+        return AnchorPos + bodyAxis.normalized * guideTorsoOffset;
+    }
+
+    // =========================================================================
+    // UI refresh (text)
+    // =========================================================================
+    private void RefreshUI()
+    {
+        if (countText != null)
+        {
+            countText.text = session == SessionState.Complete
+                ? $"{requiredGoodCompressions}\nCompressions"
+                : $"{goodCompressions}\nCompressions";
+        }
+
+        if (bpmText != null)
+        {
+            if (session == SessionState.Complete)
+                bpmText.text = "DONE";
+            else
+                bpmText.text = currentBpm > 0f
+                    ? $"{Mathf.RoundToInt(currentBpm)} BPM"
+                    : "-- BPM";
+        }
+
+        if (hintText != null)
+        {
+            if (session == SessionState.WaitingForHands || leftHand == null || rightHand == null)
+                hintText.text = "Place both hands on the chest";
+            else if (session == SessionState.ActiveCPR)
+                hintText.text = CurrentBeatPhase() > 0.5f
+                    ? "↓  Squeeze triggers"
+                    : "↑  Release triggers";
+            else
+                hintText.text = "CPR objective complete!";
+        }
+    }
+
+    // =========================================================================
+    // UI visual updates (bars)
+    // =========================================================================
+    // 0 = release (hands up), 1 = fully pressed down
+    private float CurrentBeatPhase()
+    {
+        float w = Mathf.Sin(Time.time * 2f * Mathf.PI * (TargetBpm / 60f));
+        return (w + 1f) * 0.5f;
+    }
+
+    private void UpdateDepthVisual()
+    {
+        if (depthIndicator == null) return;
+
+        float norm = currentDepth / (compressionDepthMeters * 1.5f);
+        float y    = Mathf.Lerp(-DepthBarHalfH, DepthBarHalfH, Mathf.Clamp01(norm));
+        depthIndicator.anchoredPosition = new Vector2(0f, y);
+
+        if (depthIndicatorImage != null)
+        {
+            float depthNorm = currentDepth / compressionDepthMeters;
+            Color c = depthNorm >= 0.75f
+                ? new Color(0.2f, 0.9f, 0.3f)
+                : depthNorm >= 0.35f
+                    ? new Color(0.95f, 0.85f, 0.1f)
+                    : new Color(0.9f, 0.25f, 0.25f);
+            depthIndicatorImage.color = c;
+        }
+    }
+
+    private void UpdateRhythmTargetVisual()
+    {
+        if (rhythmTarget == null) return;
+
+        if (session != SessionState.ActiveCPR)
+        {
+            if (rhythmTargetImage != null) rhythmTargetImage.color = Color.clear;
+            return;
+        }
+
+        if (rhythmTargetImage != null)
+            rhythmTargetImage.color = new Color(0.15f, 0.55f, 1f, 0.95f);
+
+        float beat = CurrentBeatPhase();
+        float norm = Mathf.Lerp(0f, 0.85f, beat);
+        float y    = Mathf.Lerp(-DepthBarHalfH, DepthBarHalfH, norm);
+        rhythmTarget.anchoredPosition = new Vector2(0f, y);
+    }
+
+    private void UpdateBpmDotVisual()
+    {
+        if (bpmDot == null) return;
+
+        if (currentBpm <= 0f)
+        {
+            if (bpmDotImage != null) bpmDotImage.color = Color.clear;
+            return;
+        }
+
+        if (bpmDotImage != null) bpmDotImage.color = new Color(0.2f, 0.45f, 1f);
+
+        float t = Mathf.Clamp01((currentBpm - acceptableBpmLow)
+                                  / (acceptableBpmHigh - acceptableBpmLow));
+        bpmDot.anchoredPosition = new Vector2(Mathf.Lerp(-BpmBarHalfW, BpmBarHalfW, t), 0f);
+    }
+
+    // =========================================================================
+    // Canvas / UI construction
+    // =========================================================================
+    private void CreateFeedbackCanvas()
+    {
+        feedbackRoot          = new GameObject("VR CPR Feedback Root").transform;
+        feedbackRoot.position = transform.position + Vector3.up * 0.45f;
+        feedbackRoot.rotation = Quaternion.identity;
+
+        GameObject canvasGO = new GameObject("VR CPR Canvas");
+        canvasGO.transform.SetParent(feedbackRoot, false);
+
+        Canvas canvas = canvasGO.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.WorldSpace;
+
+        RectTransform cr = canvasGO.GetComponent<RectTransform>();
+        cr.sizeDelta    = new Vector2(420f, 260f);
+        cr.localScale   = Vector3.one * 0.001f;
+        cr.localPosition = Vector3.zero;
+        cr.localRotation = Quaternion.identity;
+
+        // ── Panel 1: depth bar (left) + compression count ──────────────────
+        RectTransform p1 = MakePanel(cr, "Panel1",
+            pos: new Vector2(-105f, 15f), size: new Vector2(190f, 230f),
+            bg: new Color(1f, 1f, 1f, 0.93f));
+
+        BuildDepthBar(p1);
+
+        countText = MakeTMP(p1, "Count",
+            pos: new Vector2(45f, 0f), size: new Vector2(95f, 110f),
+            text: "0\nCompressions", fontSize: 15f, color: Color.black);
+        countText.fontStyle = FontStyles.Bold;
+
+        // ── Panel 2: BPM number + rate bar (right) ──────────────────────────
+        RectTransform p2 = MakePanel(cr, "Panel2",
+            pos: new Vector2(112f, -48f), size: new Vector2(175f, 118f),
+            bg: new Color(1f, 1f, 1f, 0.93f));
+
+        bpmText = MakeTMP(p2, "BPM",
+            pos: new Vector2(0f, 30f), size: new Vector2(160f, 52f),
+            text: "-- BPM", fontSize: 20f, color: Color.black);
+        bpmText.fontStyle = FontStyles.Bold;
+
+        BuildBpmBar(p2);
+
+        // ── Hint text below both panels ──────────────────────────────────────
+        hintText = MakeTMP(cr, "Hint",
+            pos: new Vector2(0f, -118f), size: new Vector2(390f, 32f),
+            text: "Place both hands on the chest", fontSize: 9f,
+            color: new Color(0.95f, 0.95f, 0.95f));
+    }
+
+    // ── Depth bar: vertical coloured segments + moving indicator + rhythm target ─
+    private void BuildDepthBar(RectTransform parent)
+    {
+        RectTransform bg = MakeImage(parent, "DepthBG",
+            pos: new Vector2(-65f, 12f), size: new Vector2(36f, 138f),
+            color: new Color(0.12f, 0.12f, 0.12f));
+
+        (Color col, float h)[] segs =
+        {
+            (new Color(0.85f, 0.15f, 0.15f), 18f),
+            (new Color(1.00f, 0.50f, 0.00f), 18f),
+            (new Color(0.95f, 0.88f, 0.10f), 22f),
+            (new Color(0.20f, 0.85f, 0.25f), 32f),
+            (new Color(0.95f, 0.88f, 0.10f), 20f),
+            (new Color(1.00f, 0.50f, 0.00f), 16f),
+            (new Color(0.85f, 0.15f, 0.15f), 12f),
+        };
+
+        float y = -69f;
+        foreach (var (col, h) in segs)
+        {
+            MakeImage(bg, "Seg", pos: new Vector2(0f, y + h * 0.5f),
+                      size: new Vector2(36f, h), color: col);
+            y += h;
+        }
+
+        // White bar — your current depth
+        RectTransform ind = MakeImage(bg, "DepthIndicator",
+            pos: new Vector2(0f, -DepthBarHalfH),
+            size: new Vector2(48f, 6f),
+            color: Color.white);
+        depthIndicator      = ind;
+        depthIndicatorImage = ind.GetComponent<Image>();
+
+        // Blue bar — rhythm target to follow
+        RectTransform tgt = MakeImage(bg, "RhythmTarget",
+            pos: new Vector2(0f, -DepthBarHalfH),
+            size: new Vector2(60f, 4f),
+            color: new Color(0.15f, 0.55f, 1f, 0.95f));
+        rhythmTarget      = tgt;
+        rhythmTargetImage = tgt.GetComponent<Image>();
+    }
+
+    // ── BPM bar: horizontal rainbow segments + sliding blue dot ───────────────
+    private void BuildBpmBar(RectTransform parent)
+    {
+        RectTransform bg = MakeImage(parent, "BpmBarBG",
+            pos: new Vector2(0f, -26f), size: new Vector2(148f, 30f),
+            color: new Color(0.12f, 0.12f, 0.12f));
+
+        Color[] cols =
+        {
+            new Color(0.85f, 0.15f, 0.15f),
+            new Color(1.00f, 0.50f, 0.00f),
+            new Color(0.95f, 0.88f, 0.10f),
+            new Color(0.20f, 0.85f, 0.25f),
+            new Color(0.95f, 0.88f, 0.10f),
+            new Color(1.00f, 0.50f, 0.00f),
+            new Color(0.85f, 0.15f, 0.15f),
+        };
+
+        float segW = 148f / cols.Length;
+        for (int i = 0; i < cols.Length; i++)
+        {
+            float x = -74f + segW * i + segW * 0.5f;
+            MakeImage(bg, $"BpmSeg{i}",
+                pos: new Vector2(x, 0f), size: new Vector2(segW, 28f),
+                color: cols[i]);
+        }
+
+        RectTransform dot = MakeImage(bg, "BpmDot",
+            pos: Vector2.zero, size: new Vector2(14f, 36f),
+            color: new Color(0.2f, 0.45f, 1f));
+        bpmDot      = dot;
+        bpmDotImage = dot.GetComponent<Image>();
+        if (bpmDotImage != null) bpmDotImage.color = Color.clear;
+    }
+
+    // ── UGUI helpers ──────────────────────────────────────────────────────────
+    private static RectTransform MakePanel(RectTransform parent, string name,
+        Vector2 pos, Vector2 size, Color bg)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        Image img = go.AddComponent<Image>();
+        img.color = bg;
+        return SetRect(go, pos, size);
+    }
+
+    private static RectTransform MakeImage(RectTransform parent, string name,
+        Vector2 pos, Vector2 size, Color color)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        go.AddComponent<Image>().color = color;
+        return SetRect(go, pos, size);
+    }
+
+    private static TextMeshProUGUI MakeTMP(RectTransform parent, string name,
+        Vector2 pos, Vector2 size, string text, float fontSize, Color color)
+    {
+        GameObject go = new GameObject(name);
+        go.transform.SetParent(parent, false);
+        TextMeshProUGUI tmp = go.AddComponent<TextMeshProUGUI>();
+        tmp.text             = text;
+        tmp.fontSize         = fontSize;
+        tmp.alignment        = TextAlignmentOptions.Center;
+        tmp.color            = color;
+        tmp.enableWordWrapping = true;
+        SetRect(go, pos, size);
+        return tmp;
+    }
+
+    private static RectTransform SetRect(GameObject go, Vector2 pos, Vector2 size)
+    {
+        RectTransform r = go.GetComponent<RectTransform>();
+        r.anchorMin      = r.anchorMax = new Vector2(0.5f, 0.5f);
+        r.pivot          = new Vector2(0.5f, 0.5f);
+        r.anchoredPosition = pos;
+        r.sizeDelta      = size;
+        return r;
+    }
+
+    // =========================================================================
+    // CPR hand placeholder — real skeletal hand models in CPR grip pose
+    // =========================================================================
+
+    // Rotation offsets for CPR palm-down pose.
+    // If hands appear sideways in your build, tweak these two fields in the Inspector.
+    [Header("CPR Hand Placeholder Pose (tune if needed)")]
+    [SerializeField] private Vector3 bottomHandEuler = new Vector3(270f, 0f, 180f);
+    [SerializeField] private Vector3 topHandEuler    = new Vector3(270f, 0f, 180f);
+    [SerializeField] private float guideHandScale = 0.36f;
+    [SerializeField] private float guideTorsoOffset = -0.045f;
+
+    private void CreatePlaceholder()
+    {
+        placeholderRoot          = new GameObject("CPR Hand Placeholder Root").transform;
+        placeholderRoot.position =
+    GuideAnchorPos
+    + CompressionAxis * 0.04f
+    + transform.forward * 0.035f;
+        placeholderRoot.rotation = Quaternion.LookRotation(transform.forward, CompressionAxis);
+
+        // Use the real skeletal hand models. Do not show primitive placeholders.
+        GameObject leftPrefab  = ResolveGuideHandModel(true);
+        GameObject rightPrefab = ResolveGuideHandModel(false);
+
+        if (leftPrefab != null && rightPrefab != null)
+        {
+            SpawnRealHands(leftPrefab, rightPrefab);
+        }
+        else
+        {
+            Debug.LogError("[VRCPRInteraction] Hand model prefabs not found. Green CPR guide disabled instead of showing primitive fallback.");
+        }
+    }
+
+    private static GameObject ResolveGuideHandModel(bool leftSide)
+    {
+        string resourceName = leftSide ? "Left Hand Model" : "Right Hand Model";
+        GameObject prefab = Resources.Load<GameObject>(resourceName);
+        if (prefab != null)
+            return prefab;
+
+        Transform[] transforms = FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform t = transforms[i];
+            if (t == null || t.name.Contains("CPR"))
+                continue;
+
+            if (t.name == resourceName || t.name.Contains(resourceName))
+                return t.gameObject;
+        }
+
+        return null;
+    }
+
+    // Instantiates both hand models stacked in CPR grip (bottom = left, top = right).
+    private void SpawnRealHands(GameObject leftPrefab, GameObject rightPrefab)
+    {
+        Color green = new Color(0.1f, 1f, 0.2f, 0.7f);
+        Material greenMaterial = CreateGuideHandMaterial(green);
+        float handScale = Mathf.Max(0.01f, guideHandScale);
+        // Force the cloned glove models palm-down. This runtime value ignores stale
+        // scene Inspector rotations that previously left both guide palms facing up.
+        Vector3 palmDownEuler = new Vector3(270f, 0f, 180f);
+
+        // ── Bottom hand (left) ──────────────────────────────────────────────
+        GameObject bottom = Instantiate(leftPrefab, placeholderRoot);
+        bottom.name = "CPR Bottom Hand";
+        bottom.transform.localPosition = new Vector3(0f, 0.014f, 0f);
+        bottom.transform.localEulerAngles = palmDownEuler;
+        bottom.transform.localScale = Vector3.one * handScale;
+        bottomGuideHand = bottom.transform;
+        PrepareGuideHandClone(bottom);
+        ApplyGreenMaterial(bottom, greenMaterial);
+        SetHandGrip(bottom, 0f, 0f); // open palm resting on chest
+
+        // ── Top hand (right) on top of left, interlocked ────────────────────
+        GameObject top = Instantiate(rightPrefab, placeholderRoot);
+        top.name = "CPR Top Hand";
+        top.transform.localPosition    = new Vector3(0f, 0.04f, 0f);
+        top.transform.localEulerAngles = palmDownEuler;
+        top.transform.localScale = Vector3.one * handScale;
+        topGuideHand = top.transform;
+        PrepareGuideHandClone(top);
+        ApplyGreenMaterial(top, greenMaterial);
+        SetHandGrip(top, 0.55f, 0.2f); // half grip on top of lower hand
+    }
+
+    private static void PrepareGuideHandClone(GameObject hand)
+    {
+        foreach (MonoBehaviour behaviour in hand.GetComponentsInChildren<MonoBehaviour>(true))
+            behaviour.enabled = false;
+
+        foreach (Collider c in hand.GetComponentsInChildren<Collider>(true))
+            c.enabled = false;
+
+        foreach (Rigidbody rb in hand.GetComponentsInChildren<Rigidbody>(true))
+            Destroy(rb);
+    }
+
+    private static Material CreateGuideHandMaterial(Color green)
+    {
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null) shader = Shader.Find("Standard");
+        if (shader == null) shader = Shader.Find("Sprites/Default");
+        if (shader == null) shader = Shader.Find("Hidden/Internal-Colored");
+        if (shader == null)
+        {
+            Debug.LogError("[VRCPRInteraction] Could not find a runtime shader for the green CPR hand guide.");
+            return null;
+        }
+
+        Material material = new Material(shader);
+        material.name = "CPR Guide Green Hand Material";
+
+        if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", green);
+        if (material.HasProperty("_Color")) material.SetColor("_Color", green);
+
+        if (green.a < 0.99f)
+        {
+            if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 1f);
+            if (material.HasProperty("_Mode")) material.SetFloat("_Mode", 3f);
+            if (material.HasProperty("_SrcBlend")) material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            if (material.HasProperty("_DstBlend")) material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            if (material.HasProperty("_ZWrite")) material.SetInt("_ZWrite", 0);
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.EnableKeyword("_ALPHABLEND_ON");
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+        }
+
+        return material;
+    }
+
+    // Replace cloned glove materials completely so broken prefab shaders cannot render pink.
+    private static void ApplyGreenMaterial(GameObject hand, Material greenMaterial)
+    {
+        if (greenMaterial == null)
+            return;
+
+        foreach (Renderer r in hand.GetComponentsInChildren<Renderer>(true))
+        {
+            Material[] materials = r.sharedMaterials;
+            for (int i = 0; i < materials.Length; i++)
+                materials[i] = greenMaterial;
+            r.sharedMaterials = materials;
+        }
+    }
+
+    // Tints every renderer on the hand green using MaterialPropertyBlock,
+    // preserving the original material's normals, specular, and shading.
+    private static void ApplyGreenMaterial(GameObject hand, Color green)
+    {
+        MaterialPropertyBlock mpb = new MaterialPropertyBlock();
+        foreach (Renderer r in hand.GetComponentsInChildren<Renderer>(true))
+        {
+            r.GetPropertyBlock(mpb);
+            // _BaseColor = URP, _Color = Standard — try both
+            mpb.SetColor("_BaseColor", green);
+            mpb.SetColor("_Color",     green);
+            r.SetPropertyBlock(mpb);
+        }
+    }
+
+    // Drives the hand animator into open-palm pose (grip=0 = flat hand).
+    private static void SetHandGrip(GameObject hand, float grip, float trigger)
+    {
+        foreach (Animator anim in hand.GetComponentsInChildren<Animator>(true))
+        {
+            if (anim == null) continue;
+            anim.enabled = true;
+            anim.SetFloat("Grip", grip);
+            anim.SetFloat("Trigger", trigger);
+            anim.Update(0f);
+            anim.enabled = false;
+        }
+    }
+
+    // Simple disc fallback used only if prefabs are missing from Resources.
+    private void SpawnPrimitiveFallback()
+    {
+        Color green = new Color(0.15f, 1f, 0.35f, 0.80f);
+        Shader sh = Shader.Find("Universal Render Pipeline/Lit");
+        if (sh == null) sh = Shader.Find("Standard");
+        if (sh == null) return;
+        Material mat = new Material(sh);
+        mat.color = green;
+        if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", green);
+
+        for (int i = 0; i < 2; i++)
+        {
+            GameObject disc = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            disc.name = i == 0 ? "FallbackHandL" : "FallbackHandR";
+            Object.Destroy(disc.GetComponent<Collider>());
+            disc.transform.SetParent(placeholderRoot, false);
+            disc.transform.localPosition = new Vector3(0f, i * 0.03f, 0f);
+            disc.transform.localScale    = new Vector3(0.12f, 0.01f, 0.10f);
+            disc.GetComponent<Renderer>().material = mat;
+        }
     }
 }

@@ -83,6 +83,12 @@ public class VRRuntimeCompatibility : MonoBehaviour
         if (!ShouldUseVRRuntime())
             yield break;
 
+        // Install scene-specific adapters BEFORE resolving the runtime camera so their
+        // Awake() can suppress auxiliary cameras (e.g. MedkitCamera in the Restaurant
+        // scene starts active and tagged MainCamera) before ResolveRuntimeCamera() runs.
+        InstallVRCPR();
+        InstallVRRestaurant();
+
         Camera xrCamera = ResolveRuntimeCamera(false);
         HideDesktopInteractionOverlay();
         HideDesktopEndCanvases();
@@ -90,7 +96,6 @@ public class VRRuntimeCompatibility : MonoBehaviour
         ConfigureWorldSpaceCanvases(xrCamera);
         EnsureVRUIPointer(xrCamera);
         EnsureVRScenarioHUD(xrCamera);
-        InstallVRCPR();
     }
 
     private static bool ShouldUseVRRuntime()
@@ -390,5 +395,19 @@ public class VRRuntimeCompatibility : MonoBehaviour
             return;
 
         target.AddComponent<VRCPRInteraction>();
+    }
+
+    private static void InstallVRRestaurant()
+    {
+        // Only the Restaurant scene needs the restaurant adapter; the script
+        // self-checks the active scene name, so calling this in other scenes is harmless.
+        if (SceneManager.GetActiveScene().name != "Restaurant Scene")
+            return;
+
+        if (FindFirstObjectByType<VRRestaurantInteraction>(FindObjectsInactive.Include) != null)
+            return;
+
+        GameObject host = new GameObject("VR Restaurant Interaction");
+        host.AddComponent<VRRestaurantInteraction>();
     }
 }
